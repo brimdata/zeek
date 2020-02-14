@@ -621,175 +621,175 @@ nb_dns_activity(struct nb_dns_info *nd, struct nb_dns_result *nr, char *errstr)
 		    msglen);
 		return (-1);
 	}
-	if (ns_initparse((u_char *)msg, msglen, &handle) < 0) {
-		snprintf(errstr, NB_DNS_ERRSIZE, "ns_initparse(): %s",
-		    my_strerror(errno));
-		nr->host_errno = NO_RECOVERY;
-		return (-1);
-	}
+	/* if (ns_initparse((u_char *)msg, msglen, &handle) < 0) { */
+	/* 	snprintf(errstr, NB_DNS_ERRSIZE, "ns_initparse(): %s", */
+	/* 	    my_strerror(errno)); */
+	/* 	nr->host_errno = NO_RECOVERY; */
+	/* 	return (-1); */
+	/* } */
 
-	/* RES_INSECURE1 style check */
-	if (_nb_dns_cmpsockaddr((struct sockaddr*)&nd->server,
-	                        (struct sockaddr*)&from, errstr) < 0) {
-		nr->host_errno = NO_RECOVERY;
-		return (-1);
-	}
+	/* /\* RES_INSECURE1 style check *\/ */
+	/* if (_nb_dns_cmpsockaddr((struct sockaddr*)&nd->server, */
+	/*                         (struct sockaddr*)&from, errstr) < 0) { */
+	/* 	nr->host_errno = NO_RECOVERY; */
+	/* 	return (-1); */
+	/* } */
 
-	/* Search for this request */
-	lastne = NULL;
-	id = ns_msg_id(handle);
-	for (ne = nd->list; ne != NULL; ne = ne->next) {
-		if (ne->id == id)
-			break;
-		lastne = ne;
-	}
+	/* /\* Search for this request *\/ */
+	/* lastne = NULL; */
+	/* id = ns_msg_id(handle); */
+	/* for (ne = nd->list; ne != NULL; ne = ne->next) { */
+	/* 	if (ne->id == id) */
+	/* 		break; */
+	/* 	lastne = ne; */
+	/* } */
 
-	/* Not an answer to a question we care about anymore */
-	if (ne == NULL)
-		return (0);
+	/* /\* Not an answer to a question we care about anymore *\/ */
+	/* if (ne == NULL) */
+	/* 	return (0); */
 
-	/* Unlink this entry */
-	if (lastne == NULL)
-		nd->list = ne->next;
-	else
-		lastne->next = ne->next;
-	ne->next = NULL;
+	/* /\* Unlink this entry *\/ */
+	/* if (lastne == NULL) */
+	/* 	nd->list = ne->next; */
+	/* else */
+	/* 	lastne->next = ne->next; */
+	/* ne->next = NULL; */
 
-	/* RES_INSECURE2 style check */
-	/* XXX not implemented */
+	/* /\* RES_INSECURE2 style check *\/ */
+	/* /\* XXX not implemented *\/ */
 
-	/* Initialize result struct */
-	memset(nr, 0, sizeof(*nr));
-	nr->cookie = ne->cookie;
-	qtype = ne->qtype;
+	/* /\* Initialize result struct *\/ */
+	/* memset(nr, 0, sizeof(*nr)); */
+	/* nr->cookie = ne->cookie; */
+	/* qtype = ne->qtype; */
 
-	/* Deal with various errors */
-	switch (ns_msg_getflag(handle, ns_f_rcode)) {
+	/* /\* Deal with various errors *\/ */
+	/* switch (ns_msg_getflag(handle, ns_f_rcode)) { */
 
-	case ns_r_nxdomain:
-		nr->host_errno = HOST_NOT_FOUND;
-		free(ne);
-		return (1);
+	/* case ns_r_nxdomain: */
+	/* 	nr->host_errno = HOST_NOT_FOUND; */
+	/* 	free(ne); */
+	/* 	return (1); */
 
-	case ns_r_servfail:
-		nr->host_errno = TRY_AGAIN;
-		free(ne);
-		return (1);
+	/* case ns_r_servfail: */
+	/* 	nr->host_errno = TRY_AGAIN; */
+	/* 	free(ne); */
+	/* 	return (1); */
 
-	case ns_r_noerror:
-		break;
+	/* case ns_r_noerror: */
+	/* 	break; */
 
-	case ns_r_formerr:
-	case ns_r_notimpl:
-	case ns_r_refused:
-	default:
-		nr->host_errno = NO_RECOVERY;
-		free(ne);
-		return (1);
-	}
+	/* case ns_r_formerr: */
+	/* case ns_r_notimpl: */
+	/* case ns_r_refused: */
+	/* default: */
+	/* 	nr->host_errno = NO_RECOVERY; */
+	/* 	free(ne); */
+	/* 	return (1); */
+	/* } */
 
-	/* Loop through records in packet */
-	memset(&rr, 0, sizeof(rr));
-	memset(&nd->dns_hostent, 0, sizeof(nd->dns_hostent));
-	he = &nd->dns_hostent.hostent;
-	/* XXX no support for aliases */
-	he->h_aliases = nd->dns_hostent.host_aliases;
-	he->h_addr_list = nd->dns_hostent.h_addr_ptrs;
-	he->h_addrtype = ne->atype;
-	he->h_length = ne->asize;
-	free(ne);
+	/* /\* Loop through records in packet *\/ */
+	/* memset(&rr, 0, sizeof(rr)); */
+	/* memset(&nd->dns_hostent, 0, sizeof(nd->dns_hostent)); */
+	/* he = &nd->dns_hostent.hostent; */
+	/* /\* XXX no support for aliases *\/ */
+	/* he->h_aliases = nd->dns_hostent.host_aliases; */
+	/* he->h_addr_list = nd->dns_hostent.h_addr_ptrs; */
+	/* he->h_addrtype = ne->atype; */
+	/* he->h_length = ne->asize; */
+	/* free(ne); */
 
-	bp = nd->dns_hostent.hostbuf;
-	ep = bp + sizeof(nd->dns_hostent.hostbuf);
-	hap = he->h_addr_list;
-	ap = he->h_aliases;
+	/* bp = nd->dns_hostent.hostbuf; */
+	/* ep = bp + sizeof(nd->dns_hostent.hostbuf); */
+	/* hap = he->h_addr_list; */
+	/* ap = he->h_aliases; */
 
-	for (i = 0; i < ns_msg_count(handle, ns_s_an); i++) {
-		/* Parse next record */
-		if (ns_parserr(&handle, ns_s_an, i, &rr) < 0) {
-			if (errno != ENODEV) {
-				nr->host_errno = NO_RECOVERY;
-				return (1);
-			}
-			/* All done */
-			break;
-		}
+	/* for (i = 0; i < ns_msg_count(handle, ns_s_an); i++) { */
+	/* 	/\* Parse next record *\/ */
+	/* 	if (ns_parserr(&handle, ns_s_an, i, &rr) < 0) { */
+	/* 		if (errno != ENODEV) { */
+	/* 			nr->host_errno = NO_RECOVERY; */
+	/* 			return (1); */
+	/* 		} */
+	/* 		/\* All done *\/ */
+	/* 		break; */
+	/* 	} */
 
-		/* Ignore records that don't answer our query (e.g. CNAMEs) */
-		atype = ns_rr_type(rr);
-		if (atype != qtype)
-			continue;
+	/* 	/\* Ignore records that don't answer our query (e.g. CNAMEs) *\/ */
+	/* 	atype = ns_rr_type(rr); */
+	/* 	if (atype != qtype) */
+	/* 		continue; */
 
-		rdata = ns_rr_rdata(rr);
-		rdlen = ns_rr_rdlen(rr);
-		rttl = ns_rr_ttl(rr);
-		switch (atype) {
+	/* 	rdata = ns_rr_rdata(rr); */
+	/* 	rdlen = ns_rr_rdlen(rr); */
+	/* 	rttl = ns_rr_ttl(rr); */
+	/* 	switch (atype) { */
 
-		case T_A:
-		case T_AAAA:
-			if (rdlen != (unsigned int) he->h_length) {
-				snprintf(errstr, NB_DNS_ERRSIZE,
-				    "nb_dns_activity(): bad rdlen %d",
-				    (int) rdlen);
-				nr->host_errno = NO_RECOVERY;
-				return (-1);
-			}
+	/* 	case T_A: */
+	/* 	case T_AAAA: */
+	/* 		if (rdlen != (unsigned int) he->h_length) { */
+	/* 			snprintf(errstr, NB_DNS_ERRSIZE, */
+	/* 			    "nb_dns_activity(): bad rdlen %d", */
+	/* 			    (int) rdlen); */
+	/* 			nr->host_errno = NO_RECOVERY; */
+	/* 			return (-1); */
+	/* 		} */
 
-			if (bp + rdlen >= ep) {
-				snprintf(errstr, NB_DNS_ERRSIZE,
-				    "nb_dns_activity(): overflow 1");
-				nr->host_errno = NO_RECOVERY;
-				return (-1);
-			}
-			if (nd->dns_hostent.numaddrs + 1 >= MAXADDRS) {
-				snprintf(errstr, NB_DNS_ERRSIZE,
-				    "nb_dns_activity(): overflow 2");
-				nr->host_errno = NO_RECOVERY;
-				return (-1);
-			}
+	/* 		if (bp + rdlen >= ep) { */
+	/* 			snprintf(errstr, NB_DNS_ERRSIZE, */
+	/* 			    "nb_dns_activity(): overflow 1"); */
+	/* 			nr->host_errno = NO_RECOVERY; */
+	/* 			return (-1); */
+	/* 		} */
+	/* 		if (nd->dns_hostent.numaddrs + 1 >= MAXADDRS) { */
+	/* 			snprintf(errstr, NB_DNS_ERRSIZE, */
+	/* 			    "nb_dns_activity(): overflow 2"); */
+	/* 			nr->host_errno = NO_RECOVERY; */
+	/* 			return (-1); */
+	/* 		} */
 
-			memcpy(bp, rdata, rdlen);
-			*hap++ = bp;
-			bp += rdlen;
-			++nd->dns_hostent.numaddrs;
+	/* 		memcpy(bp, rdata, rdlen); */
+	/* 		*hap++ = bp; */
+	/* 		bp += rdlen; */
+	/* 		++nd->dns_hostent.numaddrs; */
 
-			/* Keep looking for more A records */
-			break;
+	/* 		/\* Keep looking for more A records *\/ */
+	/* 		break; */
 
-		case T_TXT:
-			if (bp + rdlen >= ep) {
-				snprintf(errstr, NB_DNS_ERRSIZE,
-				    "nb_dns_activity(): overflow 1 for txt");
-				nr->host_errno = NO_RECOVERY;
-				return (-1);
-			}
+	/* 	case T_TXT: */
+	/* 		if (bp + rdlen >= ep) { */
+	/* 			snprintf(errstr, NB_DNS_ERRSIZE, */
+	/* 			    "nb_dns_activity(): overflow 1 for txt"); */
+	/* 			nr->host_errno = NO_RECOVERY; */
+	/* 			return (-1); */
+	/* 		} */
 
-			memcpy(bp, rdata, rdlen);
-			he->h_name = bp+1; /* First char is a control character. */
-			nr->hostent = he;
-			nr->ttl = rttl;
-			return (1);
+	/* 		memcpy(bp, rdata, rdlen); */
+	/* 		he->h_name = bp+1; /\* First char is a control character. *\/ */
+	/* 		nr->hostent = he; */
+	/* 		nr->ttl = rttl; */
+	/* 		return (1); */
 
-		case T_PTR:
-			n = dn_expand((const u_char *)msg,
-			    (const u_char *)msg + msglen, rdata, bp, ep - bp);
-			if (n < 0) {
-				/* XXX return -1 here ??? */
-				nr->host_errno = NO_RECOVERY;
-				return (1);
-			}
-			he->h_name = bp;
-			/* XXX check for overflow */
-			bp += n;		/* returned len includes EOS */
+	/* 	case T_PTR: */
+	/* 		n = dn_expand((const u_char *)msg, */
+	/* 		    (const u_char *)msg + msglen, rdata, bp, ep - bp); */
+	/* 		if (n < 0) { */
+	/* 			/\* XXX return -1 here ??? *\/ */
+	/* 			nr->host_errno = NO_RECOVERY; */
+	/* 			return (1); */
+	/* 		} */
+	/* 		he->h_name = bp; */
+	/* 		/\* XXX check for overflow *\/ */
+	/* 		bp += n;		/\* returned len includes EOS *\/ */
 
-			/* "Find first satisfactory answer" */
-			nr->hostent = he;
-			nr->ttl = rttl;
-			return (1);
-		}
-	}
+	/* 		/\* "Find first satisfactory answer" *\/ */
+	/* 		nr->hostent = he; */
+	/* 		nr->ttl = rttl; */
+	/* 		return (1); */
+	/* 	} */
+	/* } */
 
-	nr->hostent = he;
-	nr->ttl = rttl;
+	/* nr->hostent = he; */
+	/* nr->ttl = rttl; */
 	return (1);
 }
