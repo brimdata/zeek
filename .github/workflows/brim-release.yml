@@ -1,0 +1,31 @@
+name: Brim release
+
+on:
+  push:
+    tags:
+      - v*brim*
+
+jobs:
+  macos:
+    runs-on: macos-10.15
+    steps:
+      - uses: actions/checkout@v2
+      - run: git submodule update --init --recursive
+      - run: brew install bison openssl
+      # Prefer static libraries.  Appending to this file is hacky but effective.
+      - run: echo 'set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})' >> cmake/CommonCMakeConfig.cmake
+      - run: ./configure --binary-package --disable-auxtools --disable-broker-tests --disable-python --disable-zeekctl --enable-static-binpac --enable-static-broker
+      - run: sudo make -j $(sysctl -n hw.logicalcpu) install
+      - run: mkdir -p zeek/bin && cp /usr/local/zeek/bin/zeek zeek/bin
+      - run: mkdir -p zeek/share/zeek && cp -R /usr/local/zeek/share/zeek/{base,policy,site} zeek/share/zeek
+      - run: cp .github/workflows/brim-zeek-wrapper zeek/zeek
+      - run: zip -r zeek.zip zeek
+      - run: echo "::set-output name=trimmed-ref::${GITHUB_REF#refs/*/}"
+        id: trim-ref
+      - uses: svenstaro/upload-release-action@1.1.0
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: zeek.zip
+          asset_name: zeek-${{ steps.trim-ref.outputs.trimmed-ref }}-darwin-x64.zip
+          tag: ${{ github.ref }}
+          overwrite: true
