@@ -1,5 +1,8 @@
 project(Zeek C CXX)
 
+# Brim: Prefer static libraries.
+set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+
 # When changing the minimum version here, also adapt
 # aux/zeek-aux/plugin-support/skeleton/CMakeLists.txt
 cmake_minimum_required(VERSION 2.8.12 FATAL_ERROR)

@@ -1,0 +1,10 @@
+#!/bin/sh -ex
+
+brew install bison openssl
+git submodule update --init --recursive
+./configure --binary-package --disable-auxtools --disable-broker-tests --disable-python --disable-zeekctl --enable-static-binpac --enable-static-broker
+sudo make -C build -j $(sysctl -n hw.logicalcpu) install/strip
+mkdir -p zeek/bin && cp /usr/local/zeek/bin/zeek zeek/bin
+mkdir -p zeek/share/zeek && cp -R /usr/local/zeek/share/zeek/{base,policy,site} zeek/share/zeek
+cp brim/zeek zeek
+zip -r zeek-$(git describe --dirty --tags).darwin-amd64.zip zeek
