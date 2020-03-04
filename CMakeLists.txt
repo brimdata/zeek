@@ -1,7 +1,12 @@
 project(Zeek C CXX)
 
 # Brim: Prefer static libraries.
-set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+if ( CMAKE_SYSTEM_NAME STREQUAL Darwin )
+    set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+elseif ( CMAKE_SYSTEM_NAME STREQUAL Linux )
+    set(CMAKE_DL_LIBS pthread ${CMAKE_DL_LIBS})
+    set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+endif ()
 
 # When changing the minimum version here, also adapt
 # aux/zeek-aux/plugin-support/skeleton/CMakeLists.txt
