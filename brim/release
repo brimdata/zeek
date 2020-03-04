@@ -1,10 +1,30 @@
 #!/bin/sh -ex
 
-brew install bison openssl
+case $(uname -s) in
+    Darwin)
+        goos=darwin
+        logical_cpus=$(sysctl -n hw.logicalcpu)
+        brew install bison openssl
+        ;;
+    Linux)
+        goos=linux
+        logical_cpus=$(nproc)
+        sudo apt-get -y install bison flex libpcap-dev libssl-dev
+        ;;
+    *)
+        echo "unknown OS" >&2
+        exit 1
+        ;;
+esac
+
 git submodule update --init --recursive
 ./configure --binary-package --disable-auxtools --disable-broker-tests --disable-python --disable-zeekctl --enable-static-binpac --enable-static-broker
-sudo make -C build -j $(sysctl -n hw.logicalcpu) install/strip
+sudo make -C build/scripts -j $logical_cpus install/strip
+sudo make -C build/src -j $logical_cpus install/strip
 mkdir -p zeek/bin && cp /usr/local/zeek/bin/zeek zeek/bin
-mkdir -p zeek/share/zeek && cp -R /usr/local/zeek/share/zeek/{base,policy,site} zeek/share/zeek
+mkdir -p zeek/share/zeek
+for d in base policy site; do
+    cp -R /usr/local/zeek/share/zeek/$d zeek/share/zeek
+done
 cp brim/zeek zeek
-zip -r zeek-$(git describe --dirty --tags).darwin-amd64.zip zeek
+zip -r zeek-$(git describe --dirty --tags).$goos-amd64.zip zeek
