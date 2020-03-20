@@ -1,0 +1,127 @@
+$r = Invoke-WebRequest -UseBasicParsing -Headers @{"Metadata-Flavor" = "Google"} "http://metadata.google.internal/computeMetadata/v1/instance/attributes/CYGWIN_ARCH"
+$cygwin_arch = $([String]::new($r.Content))
+$r = Invoke-WebRequest -UseBasicParsing -Headers @{"Metadata-Flavor" = "Google"} "http://metadata.google.internal/computeMetadata/v1/instance/attributes/CYGWIN_INSTALL_TYPE"
+$cygwin_install_type = $([String]::new($r.Content))
+
+if (Test-Path 'C:\finished-build.txt')
+{
+    Write-Host "All config/build opeations complete. Skipping instance startup script."
+    Exit
+} elseif (Test-Path 'C:\finished-config.txt')
+{
+    cd \install
+    Write-Host "Completed first boot. Proceeding with Zeek build."
+    $r = Invoke-WebRequest -UseBasicParsing -Headers @{"Metadata-Flavor" = "Google"} "http://metadata.google.internal/computeMetadata/v1/instance/attributes/BUILD_SCRIPT"
+    echo $([String]::new($r.Content)) | Set-Content build.sh
+    \cygwin\bin\bash.exe -l \install\build.sh
+    gsutil cp \cygwin\home\SYSTEM\zeek.zip gs://my-bucket/windows-zeek-build/zeek-${cygwin_arch}.zip
+    echo finished > C:\finished-build.txt
+    Write-Host "Finished running Zeek build script"
+    Exit
+}
+
+Write-Host "Creating the working directory..."
+mkdir \install
+cd \install
+gsutil -m rsync -r gs://my-bucket/windows-zeek-build .
+
+Write-Host "Installing Cygwin..."
+
+if ($cygwin_arch -eq '64')
+{
+    $cygwin_exe = 'setup-x86_64.exe'
+} else {
+    $cygwin_exe = 'setup-x86.exe'
+}
+
+if ($cygwin_install_type -eq 'local-install')
+{
+    $where_from = '--local-package-dir'
+    $cygwin_installer = 'C:\install\cygwin\' + $cygwin_arch + 'bit\' + $cygwin_exe
+    $package_location = 'C:\install\cygwin\' + $cygwin_arch + 'bit'
+} else {
+    $where_from = '--site'
+    wget -o $cygwin_exe https://cygwin.com/$cygwin_exe
+    $cygwin_installer = 'C:\install\' + $cygwin_exe
+    $package_location = 'http://cygwin.mirrors.pair.com/'
+}
+
+$run = @{
+    FilePath     = $cygwin_installer
+    ArgumentList = @(
+        '--quiet-mode',
+        '--no-desktop',
+        "--$cygwin_install_type",
+        '--local-install',
+        '--no-verify',
+        $where_from,
+        $package_location,
+        '--root',
+        'C:/cygwin'
+    )
+    Wait         = $true
+    PassThru     = $true
+    NoNewWindow  = $true
+}
+$result = Start-Process @run
+Write-Host "Return Code: $($result.ExitCode)"
+
+Write-Host "Installing additional Cygwin packages..."
+$run = @{
+    FilePath     = $cygwin_installer
+    ArgumentList = @(
+        '--quiet-mode',
+        '--no-desktop',
+        "--$cygwin_install_type",
+        '--local-install',
+        '--no-verify',
+        $where_from,
+        $package_location,
+        '--root',
+        'C:/cygwin',
+        '--packages',
+        'git,libbind9-devel,unzip,gcc-g++,bison,flex,zlib-devel,cmake,binutils,make,python37,inetutils,openssh,wget,gendef,zip'
+    )
+    Wait         = $true
+    PassThru     = $true
+    NoNewWindow  = $true
+}
+$result = Start-Process @run
+Write-Host "Return Code: $($result.ExitCode)"
+
+Write-Host "Installing WinPCAP..."
+C:\install\winpcap-nmap-4.13.exe /S
+
+Write-Host "Configuring SSH..."
+$run = @{
+    FilePath     = 'C:\cygwin\bin\bash.exe'
+    ArgumentList = @(
+        '--login',
+        '-c',
+        '"/bin/ssh-host-config', '--yes', '--cygwin', 'ntsec"'
+    )
+    Wait         = $true
+    PassThru     = $true
+    NoNewWindow  = $true
+}
+$result = Start-Process @run
+Write-Host "Return Code: $($result.ExitCode)"
+
+Write-Host "Enabling SSH Firewall..."
+New-NetFirewallRule -DisplayName "Allow SSHD" -Direction Inbound -Action Allow -EdgeTraversalPolicy Allow -Protocol TCP -LocalPort 22
+
+Write-Host "Starting SSHD service..."
+net start cygsshd
+
+Write-Host "Installing Google Chrome..."
+$Path = $env:TEMP
+$Installer = "chrome_installer.exe"
+Invoke-WebRequest "http://dl.google.com/chrome/install/375.126/chrome_installer.exe" -OutFile $Path\$Installer
+Start-Process -FilePath $Path\$Installer -Args "/silent /install" -Verb RunAs -Wait
+Remove-Item $Path\$Installer
+
+Write-Host "Finished Configuring. Writing C:\finished-config.txt to trigger Zeek build on reboot."
+echo finished > C:\finished-config.txt
+
+Write-Host "Rebooting..."
+Restart-Computer
