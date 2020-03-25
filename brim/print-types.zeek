@@ -185,8 +185,8 @@ event zeek_init() &priority = -100
 	for ( i in paths )
 		{
 		local s = "";
-		s += "{\"match\": {\"_path\": ";
-		s += cat("\"", paths[i], "\"},");
+		s += "{\"name\":\"_path\", ";
+		s += cat("\"value\":\"", paths[i], "\",");
 		s += cat("\"descriptor\":\"", paths[i]+"_log", "\"}");
 		rules += s;
 		}
