@@ -18,7 +18,10 @@ case $(uname -s) in
 esac
 
 git submodule update --init --recursive
-./configure --binary-package --disable-auxtools --disable-broker-tests --disable-python --disable-zeekctl --enable-static-binpac --enable-static-broker
+./configure \
+	--binary-package --disable-auxtools --disable-broker-tests \
+	--disable-python --disable-zeekctl --enable-static-binpac \
+	--enable-static-broker --osx-min-version=10.10
 sudo make -C build/scripts -j $logical_cpus install/strip
 sudo make -C build/src -j $logical_cpus install/strip
 mkdir -p zeek/bin && cp /usr/local/zeek/bin/zeek zeek/bin
