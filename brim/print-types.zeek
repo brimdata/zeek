@@ -180,7 +180,7 @@ event zeek_init() &priority = -100
 	local output = "";
 	output += "{\"descriptors\": ";
         output += descriptors;
-	output += ", \"matching_rules\": [";
+	output += ", \"rules\": [";
 	local rules: vector of string = vector();
 	for ( i in paths )
 		{
