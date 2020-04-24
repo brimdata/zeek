@@ -96,9 +96,12 @@ bool LoadPolicyFileText(const char* policy_filename)
 	// ### This code is not necessarily Unicode safe!
 	// (probably fine with UTF-8)
 	pf->filedata = new char[size+1];
-	if ( fread(pf->filedata, size, 1, f) != 1 )
-        reporter->InternalError("Failed to fread() file data");
-	pf->filedata[size] = 0;
+	size_t n = fread(pf->filedata, 1, size, f);
+	if (ferror(f))
+		{
+		reporter->InternalError("Failed to fread() file data");
+		}
+	pf->filedata[n] = 0;
 	fclose(f);
 
 	// Separate the string by newlines.

@@ -1116,6 +1116,7 @@ void init_random_seed(const char* read_file, const char* write_file,
 		}
 #endif
 
+#ifndef __MINGW32__
 	if ( ! seeds_done )
 		{
 		// Gather up some entropy.
@@ -1159,6 +1160,7 @@ void init_random_seed(const char* read_file, const char* write_file,
 		else
 			seeds_done = true;
 		}
+#endif
 
 	bro_srandom(seed, seeds_done);
 
@@ -1700,7 +1702,12 @@ static string find_file_in_path(const string& filename, const string& path,
 		return string();
 
 	// If file name is an absolute path, searching within *path* is pointless.
+#ifdef __MINGW32__
+	if ( filename[0] == '/' ||
+	    (filename.size() >2 && isalpha(filename[0]) && filename[1] == ':' && filename[2] == '/') )
+#else
 	if ( filename[0] == '/' )
+#endif
 		{
 		if ( can_read(filename) )
 			return filename;
@@ -1729,6 +1736,13 @@ static string find_file_in_path(const string& filename, const string& path,
 
 std::string get_exe_path(const std::string& invocation)
 	{
+#ifdef __MINGW32__
+	char buf[MAX_PATH];
+	auto n = GetModuleFileNameA(nullptr, buf, sizeof(buf));
+	if ( n > 0 || n < sizeof(buf) )
+		return std::string(buf);
+#endif
+
 	if ( invocation.empty() )
 		return "";
 
@@ -1759,11 +1773,17 @@ std::string get_exe_path(const std::string& invocation)
 	return find_file(invocation, path);
 	}
 
+#ifdef __MINGW32__
+static const char *path_list_separator = ";";
+#else
+static const char *path_list_separator = ":";
+#endif
+
 string find_file(const string& filename, const string& path_set,
                  const string& opt_ext)
 	{
 	vector<string> paths;
-	tokenize_string(path_set, ":", &paths);
+	tokenize_string(path_set, path_list_separator, &paths);
 
 	vector<string> ext;
 	if ( ! opt_ext.empty() )
@@ -1783,7 +1803,7 @@ string find_file(const string& filename, const string& path_set,
 string find_script_file(const string& filename, const string& path_set)
 	{
 	vector<string> paths;
-	tokenize_string(path_set, ":", &paths);
+	tokenize_string(path_set, path_list_separator, &paths);
 
 	vector<string> ext(script_extensions.begin(), script_extensions.end());
 
@@ -1880,7 +1900,11 @@ double parse_rotate_base_time(const char* rotate_base_time)
 		{
 		struct tm t;
 		if ( ! strptime(rotate_base_time, "%H:%M", &t) )
-			reporter->Error("calc_next_rotate(): can't parse rotation base time");
+			{
+			reporter->Warning("calc_next_rotate(): can't parse rotation base time");
+			base = 86400;
+			}
+		
 		else
 			base = t.tm_min * 60 + t.tm_hour * 60 * 60;
 		}

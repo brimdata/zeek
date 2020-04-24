@@ -318,6 +318,13 @@ bool BinarySerializationFormat::Write(uint32_t v, const char* tag)
 	return WriteData(&v, sizeof(v));
 	}
 
+#ifdef __MINGW32__
+bool BinarySerializationFormat::Write(u_long v, const char* tag)
+	{
+	return Write((uint32_t) v, tag);
+	}
+#endif
+
 bool BinarySerializationFormat::Write(int v, const char* tag)
 	{
 	DBG_LOG(DBG_SERIAL, "Write int %d [%s]", v, tag);

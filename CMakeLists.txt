@@ -5,11 +5,25 @@ cmake_minimum_required(VERSION 3.0 FATAL_ERROR)
 project(Zeek C CXX)
 
 # Brim: Prefer static libraries.
-if ( CMAKE_SYSTEM_NAME STREQUAL Darwin )
-    set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
-elseif ( CMAKE_SYSTEM_NAME STREQUAL Linux )
+set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+if ( CMAKE_SYSTEM_NAME STREQUAL Linux )
     set(CMAKE_DL_LIBS pthread ${CMAKE_DL_LIBS})
-    set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+endif ()
+
+if ( MINGW )
+    # Define NOGDI because GDI defines an ERROR macro.
+    set(flags "-DCAF_NO_THREAD_LOCAL -DNOGDI -DWIN32_LEAN_AND_MEAN -Duint=unsigned -I ${CMAKE_CURRENT_SOURCE_DIR}/src/windows/usr.include")
+    set(CMAKE_C_FLAGS "${flags} ${CMAKE_C_FLAGS}")
+    set(CMAKE_CXX_FLAGS "${flags} ${CMAKE_CXX_FLAGS}")
+endif ()
+
+if ( NOT CMAKE_INSTALL_LIBDIR )
+    # Currently, some sub-projects may use GNUInstallDirs.cmake to choose the
+    # library install dir, while others just default to "lib".  For sake of
+    # consistency, this just overrides the former to always use "lib" in case
+    # it would have chosen something else, like "lib64", but a thing for the
+    # future may be to standardize all sub-projects to use GNUInstallDirs.
+    set(CMAKE_INSTALL_LIBDIR lib)
 endif ()
 
 if ( NOT CMAKE_INSTALL_LIBDIR )
@@ -191,7 +205,9 @@ FindRequiredPackage(FLEX)
 FindRequiredPackage(BISON)
 FindRequiredPackage(PCAP)
 FindRequiredPackage(OpenSSL)
-FindRequiredPackage(BIND)
+if (NOT WIN32)
+    FindRequiredPackage(BIND)
+endif ()
 FindRequiredPackage(ZLIB)
 
 if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/aux/binpac/CMakeLists.txt)
@@ -430,11 +446,13 @@ install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/zeek-config DESTINATION bin)
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/cmake DESTINATION share/zeek
         USE_SOURCE_PERMISSIONS)
 
-# Install wrapper script for Bro-to-Zeek renaming.
-include(InstallShellScript)
-include(InstallSymlink)
-InstallShellScript("bin" "zeek-wrapper.in" "zeek-wrapper")
-InstallSymlink("${CMAKE_INSTALL_PREFIX}/bin/zeek-wrapper" "${CMAKE_INSTALL_PREFIX}/bin/bro-config")
+if (NOT WIN32)
+    # Install wrapper script for Bro-to-Zeek renaming.
+    include(InstallShellScript)
+    include(InstallSymlink)
+    InstallShellScript("bin" "zeek-wrapper.in" "zeek-wrapper")
+    InstallSymlink("${CMAKE_INSTALL_PREFIX}/bin/zeek-wrapper" "${CMAKE_INSTALL_PREFIX}/bin/bro-config")
+endif ()
 
 ########################################################################
 ## Recurse on sub-directories

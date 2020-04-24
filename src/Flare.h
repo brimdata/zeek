@@ -22,7 +22,11 @@ public:
 	 *         Fire()'d and not yet Extinguished()'d.
 	 */
 	int FD() const
+#ifndef __MINGW32__
 		{ return pipe.ReadFD(); }
+#else
+		{ return recvfd; }
+#endif
 
 	/**
 	 * Put the object in the "ready" state.
@@ -41,7 +45,11 @@ public:
 	int Extinguish(bool signal_safe = false);
 
 private:
+#ifndef __MINGW32__
 	Pipe pipe;
+#else
+	int sendfd, recvfd;
+#endif
 };
 
 } // namespace bro

@@ -23,14 +23,15 @@ configure_file(util-config.h.in ${CMAKE_CURRENT_BINARY_DIR}/util-config.h)
 # - deletes instances of 'extern char.*getenv' in inFile
 # - writes results to outFile and adds it to list TRANSFORMED_BISON_OUTPUTS
 macro(REPLACE_YY_PREFIX_TARGET inFile outFile yylexPrefix yyPrefix)
-    set(args "'/extern char.*getenv/d")
+    set(args "/extern char.*getenv/d")
     set(args "${args}\;s/yylex/${yylexPrefix}lex/")
-    set(args "${args}\;s/yy/${yyPrefix}/g'" < ${inFile} > ${outFile})
+    set(args "${args}\;s/yy/${yyPrefix}/g" < ${inFile} > ${outFile})
     add_custom_command(OUTPUT ${outFile}
                        COMMAND ${SED_EXE}
                        ARGS ${args}
                        DEPENDS ${inFile}
                        COMMENT "[sed] replacing stuff in ${inFile}"
+                       VERBATIM
     )
     list(APPEND TRANSFORMED_BISON_OUTPUTS ${outFile})
 endmacro(REPLACE_YY_PREFIX_TARGET)
@@ -152,6 +153,9 @@ add_subdirectory(input)
 add_subdirectory(iosource)
 add_subdirectory(logging)
 add_subdirectory(probabilistic)
+if (WIN32)
+    add_subdirectory(windows)
+endif ()
 
 add_subdirectory(fuzzers)
 
@@ -395,9 +399,11 @@ endif ()
 
 install(TARGETS zeek DESTINATION bin)
 
-# Install wrapper script for Bro-to-Zeek renaming.
-include(InstallSymlink)
-InstallSymlink("${CMAKE_INSTALL_PREFIX}/bin/zeek-wrapper" "${CMAKE_INSTALL_PREFIX}/bin/bro")
+if (NOT WIN32)
+    # Install wrapper script for Bro-to-Zeek renaming.
+    include(InstallSymlink)
+    InstallSymlink("${CMAKE_INSTALL_PREFIX}/bin/zeek-wrapper" "${CMAKE_INSTALL_PREFIX}/bin/bro")
+endif ()
 
 set(BRO_EXE zeek
     CACHE STRING "Zeek executable binary" FORCE)

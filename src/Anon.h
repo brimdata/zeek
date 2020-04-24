@@ -14,6 +14,8 @@
 #include <map>
 #include <cstdint>
 
+#include <stdint.h>
+
 // TODO: Anon.h may not be the right place to put these functions ...
 
 enum ip_addr_anonymization_class_t {

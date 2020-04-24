@@ -37,6 +37,8 @@
 
 #include "plugin/Manager.h"
 
+#undef IGNORE
+
 namespace {
 struct ZeekINode {
 	dev_t dev;
@@ -106,6 +108,14 @@ static ZeekINode get_inode(FILE* f, const std::string& path)
 	if ( fstat(fileno(f), &b) )
 		reporter->FatalError("fstat of %s failed: %s\n", path.c_str(),
 		                     strerror(errno));
+
+#ifdef __MINGW32__
+	BY_HANDLE_FILE_INFORMATION bhfi;
+	if (!GetFileInformationByHandle((HANDLE)_get_osfhandle(fileno(f)), &bhfi))
+		reporter->FatalError("GetFileInformationByHandle of %s failed\n", path.c_str());
+	b.st_dev = bhfi.dwVolumeSerialNumber;
+	b.st_ino = bhfi.nFileIndexLow;
+#endif
 
 	return {b.st_dev, b.st_ino};
 	}

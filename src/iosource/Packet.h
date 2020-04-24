@@ -9,6 +9,7 @@
 #include <net/bpf.h>
 typedef struct bpf_timeval pkt_timeval;
 #else
+#include <sys/time.h>
 typedef struct timeval pkt_timeval;
 #endif
 

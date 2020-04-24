@@ -671,8 +671,8 @@ const void* CompositeHash::Align(const char* ptr, unsigned int size) const
 	ASSERT(is_power_of_2(size));
 
 	unsigned int mask = size - 1;	// Assume size is a power of 2.
-	unsigned long l_ptr = reinterpret_cast<unsigned long>(ptr);
-	unsigned long offset = l_ptr & mask;
+	unsigned long long l_ptr = reinterpret_cast<unsigned long long>(ptr);
+	unsigned long long offset = l_ptr & mask;
 
 	if ( offset > 0 )
 		return reinterpret_cast<const void*>(ptr - offset + size);
@@ -688,7 +688,7 @@ void* CompositeHash::AlignAndPad(char* ptr, unsigned int size) const
 	ASSERT(is_power_of_2(size));
 
 	unsigned int mask = size - 1;	// Assume size is a power of 2.
-	while ( (reinterpret_cast<unsigned long>(ptr) & mask) != 0 )
+	while ( (reinterpret_cast<unsigned long long>(ptr) & mask) != 0 )
 		// Not aligned - zero pad.
 		*ptr++ = '\0';
 
