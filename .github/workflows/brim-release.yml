@@ -3,7 +3,7 @@ name: Brim release
 on:
   push:
     branches:
-      - zeek-brim-newer-libpcap
+      - newer-libpcap
 
 jobs:
   release:
