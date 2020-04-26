@@ -13,6 +13,7 @@ jobs:
         os: [macos-10.15, ubuntu-18.04]
     steps:
       - uses: actions/checkout@v2
+      - run: git fetch --prune --unshallow
       - run: ./brim/release
       - uses: svenstaro/upload-release-action@1.1.0
         with:
