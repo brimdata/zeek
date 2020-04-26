@@ -9,13 +9,25 @@ case $(uname -s) in
     Linux)
         goos=linux
         logical_cpus=$(nproc)
-        sudo apt-get -y install bison flex libpcap-dev libssl-dev
+        sudo apt-get -y install bison flex libssl-dev
         ;;
     *)
         echo "unknown OS" >&2
         exit 1
         ;;
 esac
+
+# Compile a recent libpcap, since the one we'd get via apt-get is old and
+# hits https://github.com/brimsec/zeek/issues/17.
+(
+    cd $(mktemp -d)
+    wget https://github.com/the-tcpdump-group/libpcap/archive/libpcap-1.9.1.tar.gz
+    tar xzvf libpcap-1.9.1.tar.gz
+    cd libpcap-libpcap-1.9.1
+    ./configure
+    make
+    make install
+)
 
 git submodule update --init --recursive
 ./configure \
