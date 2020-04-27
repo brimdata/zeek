@@ -2,8 +2,8 @@ name: Brim release
 
 on:
   push:
-    branches:
-      - newer-libpcap
+    tags:
+      - v*brim*
 
 jobs:
   release:
