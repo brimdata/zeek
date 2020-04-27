@@ -39,7 +39,7 @@ sudo make -C build/src -j $logical_cpus install/strip
 sudo pip install zkg==2.1.2
 sudo zkg --configfile brim/zkg-config install https://github.com/salesforce/hassh --force --version cfa2315
 sudo bash -c 'echo "@load ./hassh" >> /usr/local/zeek/share/zeek/local.zeek'
-sudo zkg --configfile brim/zkg-config install https://github.com/salesforce/ja3 --foce --version 133f2a1
+sudo zkg --configfile brim/zkg-config install https://github.com/salesforce/ja3 --force --version 133f2a1
 sudo bash -c 'echo "@load ./ja3" >> /usr/local/zeek/share/zeek/local.zeek'
 mkdir -p zeek/bin && cp /usr/local/zeek/bin/zeek zeek/bin
 mkdir -p zeek/share/zeek
