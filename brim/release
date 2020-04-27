@@ -29,6 +29,7 @@ case $(uname -s) in
         ;;
 esac
 
+sudo pip install zkg==2.1.2
 git submodule update --init --recursive
 ./configure \
 	--binary-package --disable-auxtools --disable-broker-tests \
@@ -36,6 +37,10 @@ git submodule update --init --recursive
 	--enable-static-broker --osx-min-version=10.10
 sudo make -C build/scripts -j $logical_cpus install/strip
 sudo make -C build/src -j $logical_cpus install/strip
+export PATH="/usr/local/zeek/bin:$PATH"
+zkg autoconfig
+zkg install https://github.com/salesforce/hassh --force --version cfa2315
+zkg install https://github.com/salesforce/ja3 --foce --version 133f2a1
 mkdir -p zeek/bin && cp /usr/local/zeek/bin/zeek zeek/bin
 mkdir -p zeek/share/zeek
 for d in base policy site; do
