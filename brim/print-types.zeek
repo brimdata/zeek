@@ -19,9 +19,12 @@ type RecColumnType: record {
 
 # We can't create a recursive data type in zeek, so we have a separate
 # RecColumnType which mimics ColumnType for nested records. This is a
-# bit awkward but works, at least for single-level nesting,
-# which covers all Zeek 3.1 logs except for openflow. (We'll need to
-# come up with a better way).
+# awkward and restrictive and we'll need to come up with something
+# better. Given that functions _can_ recurse, one approach might be to
+# do a recursion through each record, printing out the relevant bits
+# during traversal, and then massage the output via another
+# script. (Or maybe there's a way by using `any` type that I didn't
+# see the first time around...)
 type ColumnType: record {
      name: string;
      typ: string &optional;
@@ -89,7 +92,9 @@ function make_column(field: string, field_props: record_field): ColumnType
 	return column;
 }
 
-function add_nested_record_to_td(td: vector of RecColumnType, rec_name: string)
+# Adds a nested record to a td, returning false if there is futher nesting below this.
+# (See above comment for why we need this hack).
+function add_nested_record_to_td(td: vector of RecColumnType, rec_name: string) : bool
 	{
 	local fields = record_fields(rec_name);
 	local field_names = record_type_to_vector(rec_name);
@@ -101,11 +106,19 @@ function add_nested_record_to_td(td: vector of RecColumnType, rec_name: string)
 
 		if ( ! field_props$log )
 			next;
+
+		if ((/^record / in field_props$type_name))
+			return F;
+
                 td += make_nested_column(field, field_props);
 		}
+         return T;
 }
 
-function add_record_to_td(td: vector of ColumnType, rec_name: string)
+# Adds record to a td, returning false if there is more than one
+# level of nesting below this.
+# (See above comment for why we need this hack).
+function add_record_to_td(td: vector of ColumnType, rec_name: string) : bool
 	{
 	local fields = record_fields(rec_name);
 	local field_names = record_type_to_vector(rec_name);
@@ -122,7 +135,8 @@ function add_record_to_td(td: vector of ColumnType, rec_name: string)
 			{
                         local rec_td: vector of RecColumnType = vector();
 			local split = split_string(field_props$type_name, / /);
-			add_nested_record_to_td(rec_td, split[1]);
+			if ( add_nested_record_to_td(rec_td, split[1]) == F )
+                                return F;
                         td += ColumnType($name=field, $rtyp=rec_td);
 			}
 			else
@@ -130,6 +144,7 @@ function add_record_to_td(td: vector of ColumnType, rec_name: string)
 			td += make_column(field, field_props);
 			}
 	}
+        return T;
 }
 
 
@@ -139,7 +154,10 @@ event zeek_init() &priority = -100
 	local path_to_id_map: table[string] of Log::ID = table();
 	local paths: vector of string = vector();
 	local stream: Log::Stream;
+        local stderr = open("/dev/stderr");
 
+
+	local tds: table[string] of vector of ColumnType;
 	for ( id in Log::active_streams )
 		{
 		stream = Log::active_streams[id];
@@ -147,32 +165,21 @@ event zeek_init() &priority = -100
 		if ( ! stream?$path )
 			next;
 
-                # see comment referrring to openflow and nesting above.
-                if ( stream$path == "openflow" )
-                        next;
-
-		path_to_id_map[stream$path] = id;
-
-		paths += stream$path;
-		}
-
-	sort(paths, strcmp);
-	local tds: table[string] of vector of ColumnType;
-	for ( i in paths )
-		{
-		id = path_to_id_map[paths[i]];
-		stream = Log::active_streams[id];
-
 		local info_id = cat(stream$columns);
 
 		local td: vector of ColumnType = vector();
 		td += ColumnType($name="_path", $typ="string");
-		add_record_to_td(td, info_id);
+		if ( add_record_to_td(td, info_id) == F ) {
+                        print stderr, fmt("Skipping %s log as it has records nested within records", stream$path);
+                        next;
+                }
+                paths += stream$path;
 		td += ColumnType($name="_write_ts", $typ="time");
-
 		local td_name = stream$path+"_log";
 		tds[td_name] = td;
 		}
+
+	sort(paths, strcmp);
         local descriptors = to_json(tds);
         descriptors = gsub(descriptors, /["]typ["]/, "\"type\"");
         descriptors = gsub(descriptors, /["]rtyp["]/, "\"type\"");
