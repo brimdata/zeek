@@ -2,8 +2,8 @@ name: Brim release
 
 on:
   push:
-    branches:
-      - zeek-brim-ja3-hassh-via-zkg
+    tags:
+      - v*brim*
 
 jobs:
   release:
