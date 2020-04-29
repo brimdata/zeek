@@ -11,11 +11,11 @@ cp libpcap.a libpacket.a /lib
 cp -R /cygdrive/c/install/WpdPack/Include/* /usr/include
 
 # Install CAF
-git clone -b zeek-3.0 https://github.com/henridf/actor-framework/
+git clone -b zeek-3.0 https://github.com/brimsec/actor-framework/
 cd actor-framework
 CXXFLAGS=-D_GNU_SOURCE ./configure --build-static --libs-only
 cd build
-make -j8 
+make -j8
 make -j8 install
 cd ..
 
@@ -31,7 +31,7 @@ echo "typedef long long int quad_t;" >> /usr/include/sys/types.h
 echo "typedef long long unsigned u_quad_t;" >> /usr/include/sys/types.h
 
 # Build Zeek
-git clone -b release/3.0 --recursive https://github.com/henridf/zeek
+git clone -b cygwin --recursive https://github.com/brimsec/zeek
 cd zeek
 CXXFLAGS=-D_GNU_SOURCE ./configure --disable-zeekctl --disable-python --disable-broker-tests --disable-auxtools --enable-static-broker --enable-static-binpac --with-caf=/home/$USER/actor-framework/build/
 make -j8
