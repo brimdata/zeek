@@ -41,5 +41,5 @@ mkdir -p zeek/share/zeek
 for d in base policy site; do
     cp -R /usr/local/zeek/share/zeek/$d zeek/share/zeek
 done
-cp brim/zeek zeek
+cp brim/zeekrunner zeek/zeekrunner
 zip -r zeek-$(git describe --dirty --tags).$goos-amd64.zip zeek
