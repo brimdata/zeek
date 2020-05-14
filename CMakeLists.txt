@@ -1,5 +1,5 @@
 # When changing the minimum version here, also adapt
-# aux/zeek-aux/plugin-support/skeleton/CMakeLists.txt
+# auxi/zeek-aux/plugin-support/skeleton/CMakeLists.txt
 cmake_minimum_required(VERSION 3.0 FATAL_ERROR)
 
 project(Zeek C CXX)
@@ -210,7 +210,7 @@ if (NOT WIN32)
 endif ()
 FindRequiredPackage(ZLIB)
 
-if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/aux/binpac/CMakeLists.txt)
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/auxi/binpac/CMakeLists.txt)
 
     set(ENABLE_STATIC_ONLY_SAVED ${ENABLE_STATIC_ONLY})
 
@@ -218,13 +218,13 @@ if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/aux/binpac/CMakeLists.txt)
       set(ENABLE_STATIC_ONLY true)
     endif()
 
-    add_subdirectory(aux/binpac)
+    add_subdirectory(auxi/binpac)
     set(ENABLE_STATIC_ONLY ${ENABLE_STATIC_ONLY_SAVED})
 endif ()
 FindRequiredPackage(BinPAC)
 
 if ( NOT BIFCL_EXE_PATH )
-  add_subdirectory(aux/bifcl)
+  add_subdirectory(auxi/bifcl)
 endif ()
 
 if (ENABLE_JEMALLOC)
@@ -252,7 +252,7 @@ if ( CAF_ROOT_DIR )
   find_package(CAF COMPONENTS core io openssl REQUIRED)
 endif ()
 
-add_subdirectory(aux/paraglob)
+add_subdirectory(auxi/paraglob)
 set(zeekdeps ${zeekdeps} paraglob)
 
 if ( BROKER_ROOT_DIR )
@@ -274,7 +274,7 @@ else ()
     set(ENABLE_STATIC_ONLY true)
   endif()
 
-  add_subdirectory(aux/broker)
+  add_subdirectory(auxi/broker)
   set(ENABLE_STATIC_ONLY ${ENABLE_STATIC_ONLY_SAVED})
 
   if ( BUILD_STATIC_BROKER )
@@ -282,17 +282,17 @@ else ()
   else()
     set(zeekdeps ${zeekdeps} broker)
   endif()
-  set(broker_includes ${CMAKE_CURRENT_SOURCE_DIR}/aux/broker/include ${CMAKE_CURRENT_BINARY_DIR}/aux/broker/include)
+  set(broker_includes ${CMAKE_CURRENT_SOURCE_DIR}/auxi/broker/include ${CMAKE_CURRENT_BINARY_DIR}/auxi/broker/include)
 endif ()
 
 # CAF_LIBRARIES and CAF_INCLUDE_DIRS are defined either by calling
-# find_package(CAF) or by calling add_subdirectory(aux/broker). In either case,
+# find_package(CAF) or by calling add_subdirectory(auxi/broker). In either case,
 # we have to care about CAF here because Broker headers can pull in CAF
 # headers.
 set(zeekdeps ${zeekdeps} ${CAF_LIBRARIES})
 include_directories(BEFORE ${broker_includes} ${CAF_INCLUDE_DIRS})
-include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/aux/paraglob/include)
-include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/aux/rapidjson/include)
+include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/auxi/paraglob/include)
+include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/auxi/rapidjson/include)
 include_directories(BEFORE
                     ${PCAP_INCLUDE_DIR}
                     ${BIND_INCLUDE_DIR}
@@ -301,7 +301,7 @@ include_directories(BEFORE
                     ${JEMALLOC_INCLUDE_DIR}
 )
 
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/aux/rapidjson/include/rapidjson
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/auxi/rapidjson/include/rapidjson
         DESTINATION include/zeek/3rdparty/rapidjson/include)
 
 # Optional Dependencies
@@ -356,7 +356,7 @@ endif ()
 include_directories(BEFORE ${OPENSSL_INCLUDE_DIR})
 
 # Make everyone find the highwayhash includes
-include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/aux/highwayhash)
+include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/auxi/highwayhash)
 
 # Alpine support
 if ( ${CMAKE_SYSTEM_NAME} MATCHES Linux AND EXISTS /etc/os-release )
@@ -463,8 +463,8 @@ add_subdirectory(man)
 
 include(CheckOptionalBuildSources)
 
-CheckOptionalBuildSources(aux/zeekctl   ZeekControl INSTALL_ZEEKCTL)
-CheckOptionalBuildSources(aux/zeek-aux  Zeek-Aux  INSTALL_AUX_TOOLS)
+CheckOptionalBuildSources(auxi/zeekctl   ZeekControl INSTALL_ZEEKCTL)
+CheckOptionalBuildSources(auxi/zeek-aux  Zeek-Aux  INSTALL_AUX_TOOLS)
 
 ########################################################################
 ## Packaging Setup
