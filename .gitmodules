@@ -36,7 +36,7 @@
 	url = https://github.com/zeek/rapidjson
 [submodule "aux/libkqueue"]
 	path = aux/libkqueue
-	url = https://github.com/zeek/libkqueue
+	url = https://github.com/brimsec/libkqueue
 [submodule "aux/highwayhash"]
 	path = aux/highwayhash
 	url = https://github.com/zeek/highwayhash
