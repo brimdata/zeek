@@ -1,15 +1,16 @@
 // +build windows
 
-// This tool executes zeek on windows, constructing the cygwin compatible ZEEK*
-// environment variables required.  It embeds knowledge of the locations of the
-// zeek executable and zeek script locations in the expanded 'zdeps/zeek'
-// directory inside a Brim installation.
+// This tool executes zeek on windows, constructing the required ZEEK*
+// environment variables.  It embeds knowledge of the locations of the zeek
+// executable and zeek script locations in the expanded 'zdeps/zeek' directory
+// inside a Brim installation.
 package main
 
 import (
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -27,15 +28,12 @@ var (
 	}
 )
 
-func cygPathEnvVar(name, topDir string, subdirs []string) string {
+func pathEnvVar(name, topDir string, subdirs []string) string {
 	var s []string
-	for _, l := range subdirs {
-		p := filepath.Join(topDir, filepath.FromSlash(l))
-		vol := filepath.VolumeName(p)
-		cyg := "/cygdrive/" + vol[0:1] + filepath.ToSlash(p[len(vol):])
-		s = append(s, cyg)
+	for _, d := range subdirs {
+		s = append(s, path.Join(filepath.ToSlash(topDir), d))
 	}
-	val := strings.Join(s, ":")
+	val := strings.Join(s, ";")
 	return name + "=" + val
 }
 
@@ -46,10 +44,10 @@ event zeek_init() {
 }`
 
 func launchZeek(zdepsZeekDir, zeekExecPath string) error {
-	zeekPath := cygPathEnvVar("ZEEKPATH", zdepsZeekDir, zeekPathRelPaths)
-	zeekPlugin := cygPathEnvVar("ZEEK_PLUGIN_PATH", zdepsZeekDir, zeekPluginRelPaths)
+	zeekPath := pathEnvVar("ZEEKPATH", zdepsZeekDir, zeekPathRelPaths)
+	zeekPlugin := pathEnvVar("ZEEK_PLUGIN_PATH", zdepsZeekDir, zeekPluginRelPaths)
 
-	cmd := exec.Command(zeekExecPath,  "-C", "-r", "-", "--exec", ExecScript, "local")
+	cmd := exec.Command(zeekExecPath, "-C", "-r", "-", "--exec", ExecScript, "local")
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
