@@ -5,15 +5,49 @@ on:
     tags:
       - v*brim*
 
+defaults:
+ run:
+   shell: bash
+
 jobs:
   release:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [macos-10.15, ubuntu-18.04]
+        os: [macos-10.15, ubuntu-18.04, windows-2019]
     steps:
-      - uses: actions/checkout@v2
+      # Use MSYS2's bash.exe in subsequent "shell: bash" steps.
+      - if: startsWith(matrix.os, 'windows-')
+        run: echo '::add-path::C:\msys64\usr\bin'
+
+      # actions/checkout@v2 chokes on Windows because Git for Windows'
+      # git.exe can't handle Zeek's aux directory.  Use MSYS2's git.exe
+      # on Windows until the aux directory is renamed.
+      - if: startsWith(matrix.os, 'windows-')
+        name: Windows alternative for actions/checkout@v2
+        run: |
+          set -x
+          # '-Sdd' since we need none of Git's many, heavy dependencies.
+          pacman -Sdd --needed --noconfirm git
+          git clone -b $GITHUB_REF --depth=1 git://github.com/$GITHUB_REPOSITORY .
+          git submodule update --depth=1 --init --jobs $NUMBER_OF_PROCESSORS --recursive
+      - if: "!startsWith(matrix.os, 'windows-')"
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+
+      # Remove DLLs that break Zeek's OPENSSL_CORRECT_VERSION_NUMBER
+      # CMake test by shadowing DLLs in /mingw64/bin.
+      - if: startsWith(matrix.os, 'windows-')
+        run: rm $SYSTEMROOT/system32/libcrypto-1_1-x64.dll $SYSTEMROOT/system32/libssl-1_1-x64.dll
+
+      - if: startsWith(matrix.os, 'windows-')
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.13
+
       - run: ./brim/release
+
       - uses: svenstaro/upload-release-action@1.1.0
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
