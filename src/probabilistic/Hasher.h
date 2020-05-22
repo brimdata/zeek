@@ -1,14 +1,14 @@
 // See the file "COPYING" in the main distribution directory for copyright.
 
-#ifndef PROBABILISTIC_HASHER_H
-#define PROBABILISTIC_HASHER_H
+#pragma once
 
-#include <broker/data.hh>
+#include "Hash.h"
+
 #include <broker/expected.hh>
 
 #include <memory>
 
-#include "Hash.h"
+namespace broker { class data; }
 
 namespace probabilistic {
 
@@ -24,11 +24,11 @@ public:
 	typedef hash_t digest;
 	typedef std::vector<digest> digest_vector;
 	struct seed_t {
-		uint64_t h1;
-		uint64_t h2;
+		// actually HH_U64, which has the same type
+		alignas(16) unsigned long long h[2];
 
 		friend seed_t operator+(seed_t lhs, const uint64_t rhs) {
-			lhs.h1 += rhs;
+			lhs.h[0] += rhs;
 			return lhs;
 		}
 	};
@@ -179,8 +179,8 @@ public:
 
 	friend bool operator==(const UHF& x, const UHF& y)
 		{
-		return (x.seed.h1 == y.seed.h1) &&
-		       (x.seed.h2 == y.seed.h2);
+		return (x.seed.h[0] == y.seed.h[0]) &&
+		       (x.seed.h[1] == y.seed.h[1]);
 		}
 
 	friend bool operator!=(const UHF& x, const UHF& y)
@@ -258,5 +258,3 @@ private:
 };
 
 }
-
-#endif

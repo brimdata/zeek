@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include "RuleMatcher.h"
+#include "RuleCondition.h"
 #include "IPAddr.h"
 #include "util.h"
 #include "rule-parse.h"
@@ -47,7 +48,7 @@ PID  {PIDCOMPONENT}(::{PIDCOMPONENT})*
 
 {IP6}{OWS}"/"{OWS}{D}	{
 	int len = 0;
-	string ip = extract_ip_and_len(yytext, &len);
+	std::string ip = extract_ip_and_len(yytext, &len);
 	rules_lval.prefixval = new IPPrefix(IPAddr(ip), len, true);
 	return TOK_IP6;
 	}
@@ -162,12 +163,12 @@ finger	{ rules_lval.val = Rule::FINGER; return TOK_PATTERN_TYPE; }
 	}
 
 {D}	{
-	rules_lval.val = (uint32) atoi(yytext);
+	rules_lval.val = (uint32_t) atoi(yytext);
 	return TOK_INT;
 	}
 
 0x{H}	{
-	rules_lval.val = (uint32) strtol(yytext, 0, 16);
+	rules_lval.val = (uint32_t) strtol(yytext, 0, 16);
 	return TOK_INT;
 	}
 
@@ -197,7 +198,7 @@ finger	{ rules_lval.val = Rule::FINGER; return TOK_PATTERN_TYPE; }
 		const char fmt[] = "(?i:%s)";
 		int n = len + strlen(fmt);
 		char* s = new char[n + 5 /* slop */];
-		safe_snprintf(s, n + 5, fmt, yytext + 1);
+		snprintf(s, n + 5, fmt, yytext + 1);
 		rules_lval.str = s;
 		}
 	else

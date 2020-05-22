@@ -21,7 +21,7 @@ RUN yum -y install \
   && yum clean all && rm -rf /var/cache/yum
 
 RUN yum -y install \
-    cmake \
+    cmake3 \
     make \
     flex \
     bison \

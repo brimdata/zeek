@@ -2,6 +2,8 @@
  * See the file "COPYING" in the main distribution directory for copyright.
  */
 
+#pragma once
+
 /* Private data */
 struct nb_dns_info;
 
@@ -9,8 +11,8 @@ struct nb_dns_info;
 struct nb_dns_result {
 	void *cookie;
 	int host_errno;
-	struct hostent *hostent;
 	uint32_t ttl;
+	struct hostent *hostent;
 };
 
 typedef unsigned int nb_uint32_t;

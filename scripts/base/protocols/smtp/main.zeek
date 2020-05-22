@@ -298,7 +298,7 @@ event mime_one_header(c: connection, h: mime_header_rec) &priority=3
 		c$smtp$path += ip;
 	}
 
-event connection_state_remove(c: connection) &priority=-5
+event successful_connection_remove(c: connection) &priority=-5
 	{
 	if ( c?$smtp )
 		smtp_message(c);
@@ -336,5 +336,6 @@ function describe(rec: Info): string
 			(|rec$rcptto|>1 ? fmt(" (plus %d others)", |rec$rcptto|-1) : ""),
 			(abbrev_subject != "" ? fmt(": %s", abbrev_subject) : ""));
 		}
-		return "";
+
+	return "";
 	}

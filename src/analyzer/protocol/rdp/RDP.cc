@@ -12,7 +12,7 @@ RDP_Analyzer::RDP_Analyzer(Connection* c)
 	interp = new binpac::RDP::RDP_Conn(this);
 
 	had_gap = false;
-	pia = 0;
+	pia = nullptr;
 	}
 
 RDP_Analyzer::~RDP_Analyzer()
@@ -66,8 +66,8 @@ void RDP_Analyzer::DeliverStream(int len, const u_char* data, bool orig)
 					return;
 					}
 
-				pia->FirstPacket(true, 0);
-				pia->FirstPacket(false, 0);
+				pia->FirstPacket(true, nullptr);
+				pia->FirstPacket(false, nullptr);
 				}
 
 			ForwardStream(len, data, orig);
@@ -75,7 +75,7 @@ void RDP_Analyzer::DeliverStream(int len, const u_char* data, bool orig)
 		else
 			{
 			if ( rdp_native_encrypted_data )
-				BifEvent::generate_rdp_native_encrypted_data(
+				BifEvent::enqueue_rdp_native_encrypted_data(
 				        interp->bro_analyzer(), interp->bro_analyzer()->Conn(),
 				        orig, len);
 			}
@@ -93,7 +93,7 @@ void RDP_Analyzer::DeliverStream(int len, const u_char* data, bool orig)
 		}
 	}
 
-void RDP_Analyzer::Undelivered(uint64 seq, int len, bool orig)
+void RDP_Analyzer::Undelivered(uint64_t seq, int len, bool orig)
 	{
 	tcp::TCP_ApplicationAnalyzer::Undelivered(seq, len, orig);
 	had_gap = true;

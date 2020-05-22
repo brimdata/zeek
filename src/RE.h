@@ -1,17 +1,16 @@
 // See the file "COPYING" in the main distribution directory for copyright.
 
-#ifndef re_h
-#define re_h
+#pragma once
 
-#include "Obj.h"
-#include "Dict.h"
-#include "BroString.h"
+#include "List.h"
 #include "CCL.h"
 #include "EquivClass.h"
 
 #include <set>
 #include <map>
+#include <string>
 
+#include <sys/types.h> // for u_char
 #include <ctype.h>
 typedef int (*cce_func)(int);
 
@@ -21,6 +20,7 @@ class DFA_Machine;
 class Specific_RE_Matcher;
 class RE_Matcher;
 class DFA_State;
+class BroString;
 
 extern int case_insensitive;
 extern CCL* curr_ccl;
@@ -34,7 +34,7 @@ extern void synerr(const char str[]);
 
 typedef int AcceptIdx;
 typedef std::set<AcceptIdx> AcceptingSet;
-typedef uint64 MatchPos;
+typedef uint64_t MatchPos;
 typedef std::map<AcceptIdx, MatchPos> AcceptingMatchSet;
 typedef name_list string_list;
 
@@ -54,33 +54,40 @@ public:
 
 	void SetPat(const char* pat)	{ pattern_text = copy_string(pat); }
 
-	int Compile(int lazy = 0);
+	bool Compile(bool lazy = false);
 
 	// The following is vestigial from flex's use of "{name}" definitions.
 	// It's here because at some point we may want to support such
 	// functionality.
-	const char* LookupDef(const char* def);
+	std::string LookupDef(const std::string& def);
 
-	void InsertCCL(const char* txt, CCL* ccl) { ccl_dict.Insert(txt, ccl); }
+	void InsertCCL(const char* txt, CCL* ccl) { ccl_dict[std::string(txt)] = ccl; }
 	int InsertCCL(CCL* ccl)
 		{
 		ccl_list.push_back(ccl);
 		return ccl_list.length() - 1;
 		}
-	CCL* LookupCCL(const char* txt)	{ return ccl_dict.Lookup(txt); }
+	CCL* LookupCCL(const char* txt)
+		{
+		const auto& iter = ccl_dict.find(std::string(txt));
+		if ( iter != ccl_dict.end() )
+			return iter->second;
+
+		return nullptr;
+		}
 	CCL* LookupCCL(int index)	{ return ccl_list[index]; }
 	CCL* AnyCCL();
 
 	void ConvertCCLs();
 
-	int MatchAll(const char* s);
-	int MatchAll(const BroString* s);
+	bool MatchAll(const char* s);
+	bool MatchAll(const BroString* s);
 
 	// Compiles a set of regular expressions simultaniously.
 	// 'idx' contains indizes associated with the expressions.
 	// On matching, the set of indizes is returned which correspond
 	// to the matching expressions.  (idx must not contain zeros).
-	int CompileSet(const string_list& set, const int_list& idx);
+	bool CompileSet(const string_list& set, const int_list& idx);
 
 	// Returns the position in s just beyond where the first match
 	// occurs, or 0 if there is no such position in s.  Note that
@@ -112,15 +119,15 @@ protected:
 	// appending to an existing pattern_text.
 	void AddPat(const char* pat, const char* orig_fmt, const char* app_fmt);
 
-	int MatchAll(const u_char* bv, int n);
+	bool MatchAll(const u_char* bv, int n);
 	int Match(const u_char* bv, int n);
 
 	match_type mt;
 	int multiline;
 	char* pattern_text;
 
-	PDict<char> defs;
-	PDict<CCL> ccl_dict;
+	std::map<std::string, std::string> defs;
+	std::map<std::string, CCL*> ccl_dict;
 	PList<CCL> ccl_list;
 	EquivClass equiv_class;
 	int* ecs;
@@ -133,10 +140,10 @@ class RE_Match_State {
 public:
 	explicit RE_Match_State(Specific_RE_Matcher* matcher)
 		{
-		dfa = matcher->DFA() ? matcher->DFA() : 0;
+		dfa = matcher->DFA() ? matcher->DFA() : nullptr;
 		ecs = matcher->EC()->EquivClasses();
 		current_pos = -1;
-		current_state = 0;
+		current_state = nullptr;
 		}
 
 	const AcceptingMatchSet& AcceptedMatches() const
@@ -152,7 +159,7 @@ public:
 	void Clear()
 		{
 		current_pos = -1;
-		current_state = 0;
+		current_state = nullptr;
 		accepted_matches.clear();
 		}
 
@@ -167,24 +174,24 @@ protected:
 	int current_pos;
 };
 
-class RE_Matcher {
+class RE_Matcher final {
 public:
 	RE_Matcher();
 	explicit RE_Matcher(const char* pat);
 	RE_Matcher(const char* exact_pat, const char* anywhere_pat);
-	virtual ~RE_Matcher();
+	~RE_Matcher();
 
 	void AddPat(const char* pat);
 
 	// Makes the matcher as specified to date case-insensitive.
 	void MakeCaseInsensitive();
 
-	int Compile(int lazy = 0);
+	bool Compile(bool lazy = false);
 
 	// Returns true if s exactly matches the pattern, false otherwise.
-	int MatchExactly(const char* s)
+	bool MatchExactly(const char* s)
 		{ return re_exact->MatchAll(s); }
-	int MatchExactly(const BroString* s)
+	bool MatchExactly(const BroString* s)
 		{ return re_exact->MatchAll(s); }
 
 	// Returns the position in s just beyond where the first match
@@ -222,5 +229,3 @@ protected:
 
 extern RE_Matcher* RE_Matcher_conjunction(const RE_Matcher* re1, const RE_Matcher* re2);
 extern RE_Matcher* RE_Matcher_disjunction(const RE_Matcher* re1, const RE_Matcher* re2);
-
-#endif

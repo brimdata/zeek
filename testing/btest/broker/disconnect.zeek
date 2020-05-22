@@ -32,8 +32,8 @@ event zeek_init()
 
 event Broker::peer_lost(endpoint: Broker::EndpointInfo, msg: string)
 	{
-	system("touch lost");
 	print "peer lost", msg;
+	system("touch lost");
 
 	if ( peers == 2 )
 		terminate();

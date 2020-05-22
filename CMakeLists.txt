@@ -1,3 +1,7 @@
+# When changing the minimum version here, also adapt
+# aux/zeek-aux/plugin-support/skeleton/CMakeLists.txt
+cmake_minimum_required(VERSION 3.0 FATAL_ERROR)
+
 project(Zeek C CXX)
 
 # Brim: Prefer static libraries.
@@ -7,10 +11,6 @@ elseif ( CMAKE_SYSTEM_NAME STREQUAL Linux )
     set(CMAKE_DL_LIBS pthread ${CMAKE_DL_LIBS})
     set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 endif ()
-
-# When changing the minimum version here, also adapt
-# aux/zeek-aux/plugin-support/skeleton/CMakeLists.txt
-cmake_minimum_required(VERSION 2.8.12 FATAL_ERROR)
 
 if ( NOT CMAKE_INSTALL_LIBDIR )
     # Currently, some sub-projects may use GNUInstallDirs.cmake to choose the
@@ -22,9 +22,23 @@ if ( NOT CMAKE_INSTALL_LIBDIR )
 endif ()
 
 include(cmake/CommonCMakeConfig.cmake)
+include(cmake/FindClangTidy.cmake)
+include(cmake/CheckCompilerArch.cmake)
 
 ########################################################################
 ## Project/Build Configuration
+
+if ( ZEEK_ENABLE_FUZZERS )
+    # Fuzzers use shared lib to save disk space, so need -fPIC on everything
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif ()
+
+if (ENABLE_ZEEK_UNIT_TESTS)
+    enable_testing()
+    add_definitions(-DDOCTEST_CONFIG_SUPER_FAST_ASSERTS)
+else ()
+    add_definitions(-DDOCTEST_CONFIG_DISABLE)
+endif ()
 
 if ( ENABLE_CCACHE )
     find_program(CCACHE_PROGRAM ccache)
@@ -78,11 +92,14 @@ execute_process(COMMAND grep "^#define  *BRO_PLUGIN_API_VERSION"
                 OUTPUT_STRIP_TRAILING_WHITESPACE)
 string(REGEX REPLACE "^#define.*VERSION *" "" API_VERSION "${API_VERSION}")
 
-string(REPLACE "." " " version_numbers ${VERSION})
+string(REGEX REPLACE "[.-]" " " version_numbers ${VERSION})
 separate_arguments(version_numbers)
 list(GET version_numbers 0 VERSION_MAJOR)
 list(GET version_numbers 1 VERSION_MINOR)
+list(GET version_numbers 2 VERSION_PATCH)
 set(VERSION_MAJ_MIN "${VERSION_MAJOR}.${VERSION_MINOR}")
+math(EXPR ZEEK_VERSION_NUMBER
+     "${VERSION_MAJOR} * 10000 + ${VERSION_MINOR} * 100 + ${VERSION_PATCH}")
 
 set(VERSION_C_IDENT "${VERSION}_plugin_${API_VERSION}")
 string(REGEX REPLACE "-[0-9]*$" "_git" VERSION_C_IDENT "${VERSION_C_IDENT}")
@@ -120,10 +137,38 @@ if ( NOT BINARY_PACKAGING_MODE )
     _make_install_dir_symlink("${CMAKE_INSTALL_PREFIX}/lib/bro" "${CMAKE_INSTALL_PREFIX}/lib/zeek")
 endif ()
 
-if ( SANITIZERS )
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=${SANITIZERS} -fno-omit-frame-pointer")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=${SANITIZERS} -fno-omit-frame-pointer")
-    set(CMAKE_LD_FLAGS "${CMAKE_LD_FLAGS} -fsanitize=${SANITIZERS} -fno-omit-frame-pointer")
+if ( ZEEK_SANITIZERS )
+    # Check the thread library info early as setting compiler flags seems to
+    # interfere with the detection and cause CMAKE_THREAD_LIBS_INIT to not
+    # include -lpthread when it should.
+    find_package(Threads)
+    set(_sanitizer_flags "-fsanitize=${ZEEK_SANITIZERS}")
+    set(_sanitizer_flags "${_sanitizer_flags} -fno-omit-frame-pointer")
+    set(_sanitizer_flags "${_sanitizer_flags} -fno-optimize-sibling-calls")
+
+    if ( NOT DEFINED ZEEK_SANITIZER_OPTIMIZATIONS )
+        if ( DEFINED ENV{NO_OPTIMIZATIONS} )
+            # Using -O1 is generally the suggestion to get more reasonable
+            # performance.  The one downside is it that the compiler may
+            # optimize out code that otherwise generates an error/leak in a -O0
+            # build, but that should be rare and users mostly will not be
+            # running unoptimized builds in production anyway.
+            set(ZEEK_SANITIZER_OPTIMIZATIONS false CACHE INTERNAL "" FORCE)
+        else ()
+            set(ZEEK_SANITIZER_OPTIMIZATIONS true CACHE INTERNAL "" FORCE)
+        endif ()
+    endif ()
+
+    if ( ZEEK_SANITIZER_OPTIMIZATIONS )
+        set(_sanitizer_flags "${_sanitizer_flags} -O1")
+    endif ()
+
+    # Technically, the we also need to use the compiler to drive linking and
+    # give the sanitizer flags there, too.  However, CMake, by default, uses
+    # the compiler for linking and so the automatically flags get used.  See
+    # https://cmake.org/pipermail/cmake/2014-August/058268.html
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${_sanitizer_flags}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${_sanitizer_flags}")
 endif()
 
 ########################################################################
@@ -187,16 +232,26 @@ if (MISSING_PREREQS)
     message(FATAL_ERROR "Configuration aborted due to missing prerequisites")
 endif ()
 
+if ( CAF_ROOT_DIR )
+  find_package(CAF COMPONENTS core io openssl REQUIRED)
+endif ()
+
 add_subdirectory(aux/paraglob)
 set(zeekdeps ${zeekdeps} paraglob)
 
 if ( BROKER_ROOT_DIR )
+  # Avoid calling find_package(CAF) twice.
+  if ( NOT CAF_ROOT_DIR )
+    find_package(CAF COMPONENTS core io openssl REQUIRED)
+  endif ()
   find_package(Broker REQUIRED)
-  find_package(CAF COMPONENTS core io openssl REQUIRED)
-
-  set(zeekdeps ${zeekdeps} ${BROKER_LIBRARY} ${CAF_LIBRARIES})
-  include_directories(BEFORE ${BROKER_INCLUDE_DIR})
+  set(zeekdeps ${zeekdeps} ${BROKER_LIBRARY})
+  set(broker_includes ${BROKER_INCLUDE_DIR})
 else ()
+  if ( ZEEK_SANITIZERS )
+    set(BROKER_SANITIZERS ${ZEEK_SANITIZERS})
+  endif ()
+
   set(ENABLE_STATIC_ONLY_SAVED ${ENABLE_STATIC_ONLY})
 
   if ( BUILD_STATIC_BROKER )
@@ -211,16 +266,17 @@ else ()
   else()
     set(zeekdeps ${zeekdeps} broker)
   endif()
-  include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/aux/broker
-                             ${CMAKE_CURRENT_BINARY_DIR}/aux/broker)
+  set(broker_includes ${CMAKE_CURRENT_SOURCE_DIR}/aux/broker/include ${CMAKE_CURRENT_BINARY_DIR}/aux/broker/include)
 endif ()
 
-# CAF headers aren't necessarily in same location as Broker headers and
-# inclusion of a Broker header may pull in CAF headers.
-include_directories(BEFORE ${CAF_INCLUDE_DIR_CORE})
-include_directories(BEFORE ${CAF_INCLUDE_DIR_IO})
-include_directories(BEFORE ${CAF_INCLUDE_DIR_OPENSSL})
+# CAF_LIBRARIES and CAF_INCLUDE_DIRS are defined either by calling
+# find_package(CAF) or by calling add_subdirectory(aux/broker). In either case,
+# we have to care about CAF here because Broker headers can pull in CAF
+# headers.
+set(zeekdeps ${zeekdeps} ${CAF_LIBRARIES})
+include_directories(BEFORE ${broker_includes} ${CAF_INCLUDE_DIRS})
 include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/aux/paraglob/include)
+include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/aux/rapidjson/include)
 include_directories(BEFORE
                     ${PCAP_INCLUDE_DIR}
                     ${BIND_INCLUDE_DIR}
@@ -228,6 +284,9 @@ include_directories(BEFORE
                     ${ZLIB_INCLUDE_DIR}
                     ${JEMALLOC_INCLUDE_DIR}
 )
+
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/aux/rapidjson/include/rapidjson
+        DESTINATION include/zeek/3rdparty/rapidjson/include)
 
 # Optional Dependencies
 
@@ -280,6 +339,9 @@ endif ()
 # if one specifies --with-openssl (which may be common).
 include_directories(BEFORE ${OPENSSL_INCLUDE_DIR})
 
+# Make everyone find the highwayhash includes
+include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/aux/highwayhash)
+
 # Alpine support
 if ( ${CMAKE_SYSTEM_NAME} MATCHES Linux AND EXISTS /etc/os-release )
     execute_process(
@@ -321,7 +383,8 @@ include(PCAPTests)
 include(OpenSSLTests)
 include(CheckNameserCompat)
 include(GetArchitecture)
-include(RequireCXX11)
+include(RequireCXX17)
+include(FindKqueue)
 
 if ( (OPENSSL_VERSION VERSION_EQUAL "1.1.0") OR (OPENSSL_VERSION VERSION_GREATER "1.1.0") )
   set(ZEEK_HAVE_OPENSSL_1_1 true CACHE INTERNAL "" FORCE)
@@ -339,11 +402,8 @@ endif ()
 string(TOLOWER ${CMAKE_BUILD_TYPE} CMAKE_BUILD_TYPE_LOWER)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/zeek-config.h.in
                ${CMAKE_CURRENT_BINARY_DIR}/zeek-config.h)
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/bro-config.h.in
-               ${CMAKE_CURRENT_BINARY_DIR}/bro-config.h)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/zeek-config.h DESTINATION include/zeek)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/bro-config.h DESTINATION include/zeek)
 
 if ( CAF_ROOT_DIR )
   set(ZEEK_CONFIG_CAF_ROOT_DIR ${CAF_ROOT_DIR})
@@ -419,6 +479,7 @@ message(
     "\nInstall prefix:    ${CMAKE_INSTALL_PREFIX}"
     "\nZeek Script Path:  ${ZEEK_SCRIPT_INSTALL_PATH}"
     "\nDebug mode:        ${ENABLE_DEBUG}"
+    "\nUnit tests:        ${ENABLE_ZEEK_UNIT_TESTS}"
     "\n"
     "\nCC:                ${CMAKE_C_COMPILER}"
     "\nCFLAGS:            ${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${BuildType}}"
@@ -435,6 +496,9 @@ message(
     "\n        tcmalloc:  ${USE_PERFTOOLS_TCMALLOC}"
     "\n       debugging:  ${USE_PERFTOOLS_DEBUG}"
     "\njemalloc:          ${ENABLE_JEMALLOC}"
+    "\n"
+    "\nFuzz Targets:      ${ZEEK_ENABLE_FUZZERS}"
+    "\nFuzz Engine:       ${ZEEK_FUZZING_ENGINE}"
     "\n"
     "\n================================================================\n"
 )

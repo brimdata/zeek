@@ -21,7 +21,7 @@ global quit_receiver: event();
 module Test;
 
 export {
-        redef enum Log::ID += { LOG };
+	redef enum Log::ID += { LOG };
 
 	type Info: record {
 		b: bool;
@@ -76,8 +76,6 @@ event quit_receiver()
 
 @TEST-START-FILE send.zeek
 
-
-
 @load ./common
 
 event zeek_init()
@@ -101,7 +99,7 @@ event Broker::peer_added(endpoint: Broker::EndpointInfo, msg: string)
 
 	local empty_set: set[string];
 	local empty_vector: vector of string;
-	
+
 	Log::write(Test::LOG, [
 		$b=T,
 		$i=-42,
@@ -132,6 +130,5 @@ event Broker::log_flush()
 	if ( done )
 		Broker::publish("zeek/", quit_receiver);
 	}
-
 
 @TEST-END-FILE

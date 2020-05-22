@@ -3,8 +3,8 @@ btest_jobs: &BTEST_JOBS 8
 btest_retries: &BTEST_RETRIES 2
 memory: &MEMORY 6GB
 
-config: &CONFIG --build-type=release
-memcheck_config: &MEMCHECK_CONFIG --build-type=debug --enable-perftools-debug
+config: &CONFIG --build-type=release --enable-cpp-tests  --disable-broker-tests
+memcheck_config: &MEMCHECK_CONFIG --build-type=debug --enable-cpp-tests --disable-broker-tests --sanitizers=address --enable-fuzzers
 
 resources_template: &RESOURCES_TEMPLATE
   cpu: *CPUS
@@ -77,6 +77,13 @@ debian9_task:
     << : *RESOURCES_TEMPLATE
   << : *CI_TEMPLATE
 
+debian9_32bit_task:
+  container:
+    # Debian 9 EOL: June 2022
+    dockerfile: ci/debian-9-32bit/Dockerfile
+    << : *RESOURCES_TEMPLATE
+  << : *CI_TEMPLATE
+
 ubuntu18_task:
   container:
     # Ubuntu 18.04 EOL: April 2023
@@ -123,8 +130,9 @@ memcheck_task:
     # Just uses a recent/common distro to run memory error/leak checks.
     dockerfile: ci/ubuntu-18.04/Dockerfile
     cpu: 8
+    # AddressSanitizer uses a lot more memory than a typical config.
     memory: 16GB
   << : *CI_TEMPLATE
+  test_fuzzers_script: ./ci/test-fuzzers.sh
   env:
-    ZEEK_CI_LEAK_CHECK: true
     ZEEK_CI_CONFIGURE_FLAGS: *MEMCHECK_CONFIG
