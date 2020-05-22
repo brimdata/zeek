@@ -1,7 +1,10 @@
-name: Brim release
+name: Brim
 
 on:
+  pull_request:
   push:
+    branches:
+      - master
     tags:
       - v*brim*
 
@@ -51,7 +54,9 @@ jobs:
         run: |
           # '-Sdd' since we need none of Git's many, heavy dependencies.
           pacman -Sdd --needed --noconfirm git
-          git clone -b $GITHUB_REF --depth=1 git://github.com/$GITHUB_REPOSITORY .
+          git clone --depth=1 --no-checkout --single-branch git://github.com/$GITHUB_REPOSITORY .
+          git fetch --depth=1 origin $GITHUB_REF
+          git checkout FETCH_HEAD
           git submodule update --depth=1 --init --jobs $NUMBER_OF_PROCESSORS --recursive
       - if: "!startsWith(matrix.os, 'windows-')"
         uses: actions/checkout@v2
@@ -70,7 +75,13 @@ jobs:
 
       - run: ./brim/release
 
-      - uses: svenstaro/upload-release-action@1.1.0
+      - uses: actions/upload-artifact@v2
+        with:
+          name: ${{ matrix.os }}
+          path: zeek-*.zip
+
+      - if: startsWith(github.event.ref, 'refs/tags/')
+        uses: svenstaro/upload-release-action@1.1.0
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: zeek-*.zip
