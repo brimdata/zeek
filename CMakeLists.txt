@@ -5,9 +5,13 @@ cmake_minimum_required(VERSION 3.0 FATAL_ERROR)
 project(Zeek C CXX)
 
 # Brim: Prefer static libraries.
-set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
-if ( CMAKE_SYSTEM_NAME STREQUAL Linux )
-    set(CMAKE_DL_LIBS pthread ${CMAKE_DL_LIBS})
+if ( MINGW )
+    set(CMAKE_EXE_LINKER_FLAGS "-static ${CMAKE_EXE_LINKER_FLAGS}")
+else ()
+    set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+    if ( CMAKE_SYSTEM_NAME STREQUAL Linux )
+        set(CMAKE_DL_LIBS pthread ${CMAKE_DL_LIBS})
+    endif ()
 endif ()
 
 if ( MINGW )

@@ -5,15 +5,71 @@ on:
     tags:
       - v*brim*
 
+defaults:
+ run:
+   shell: bash
+
 jobs:
   release:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [macos-10.15, ubuntu-18.04]
+        os: [macos-10.15, ubuntu-18.04, windows-2019]
     steps:
-      - uses: actions/checkout@v2
+      # Remove this step when the hosted runners have
+      # https://github.com/actions/virtual-environments/pull/632.
+      - if: startsWith(matrix.os, 'windows-')
+        name: Windows MSYS2 installation
+        shell: pwsh
+        run: |
+          Set-PSDebug -Trace 1
+          if (Test-Path C:/msys64) { exit 0 }
+          $url = 'http://repo.msys2.org/distrib/x86_64/msys2-base-x86_64-20190524.tar.xz'
+          bash -c "curl -LSs $url | tar -xJf - -C /c"
+          $env:Path = "C:\msys64\usr\bin"
+          # packman-key is a script, so PowerShell can't run it directly.
+          bash -c 'pacman-key --init'
+          bash -c 'pacman-key --populate msys2'
+          # pacman-key starts gpg-agent, causing breakage if pacman
+          # upgrades msys-2.0.dll.
+          Stop-Process -Name gpg-agent
+          # First update pacman to avoid
+          # https://github.com/msys2/MSYS2-packages/issues/1960.
+          pacman -Sy --noconfirm pacman
+          pacman -Syuu --noconfirm
+          pacman -Syuu --noconfirm
+
+      # Use MSYS2's bash.exe in subsequent "shell: bash" steps.
+      - if: startsWith(matrix.os, 'windows-')
+        run: echo '::add-path::C:\msys64\usr\bin'
+
+      # actions/checkout@v2 chokes on Windows because Git for Windows'
+      # git.exe can't handle Zeek's aux directory.  Use MSYS2's git.exe
+      # on Windows until the aux directory is renamed.
+      - if: startsWith(matrix.os, 'windows-')
+        name: Windows alternative for actions/checkout@v2
+        run: |
+          # '-Sdd' since we need none of Git's many, heavy dependencies.
+          pacman -Sdd --needed --noconfirm git
+          git clone -b $GITHUB_REF --depth=1 git://github.com/$GITHUB_REPOSITORY .
+          git submodule update --depth=1 --init --jobs $NUMBER_OF_PROCESSORS --recursive
+      - if: "!startsWith(matrix.os, 'windows-')"
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+
+      # Remove DLLs that break Zeek's OPENSSL_CORRECT_VERSION_NUMBER
+      # CMake test by shadowing DLLs in /mingw64/bin.
+      - if: startsWith(matrix.os, 'windows-')
+        run: rm $SYSTEMROOT/system32/libcrypto-1_1-x64.dll $SYSTEMROOT/system32/libssl-1_1-x64.dll
+
+      - if: startsWith(matrix.os, 'windows-')
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.14.3
+
       - run: ./brim/release
+
       - uses: svenstaro/upload-release-action@1.1.0
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
