@@ -24,7 +24,7 @@ case $(uname) in
         install_libpcap /
         ;;
     MSYS_NT*)
-        dir \tmp
+        dir /tmp
         exe=.exe
         export PATH=/mingw64/bin:$PATH
         go build -o brim/zeekrunner.exe brim/zeekrunner.go
