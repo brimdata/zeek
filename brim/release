@@ -1,4 +1,4 @@
-#!/bin/sh -ex
+#!/bin/bash -ex
 
 install_libpcap() {
     install_prefix=${1:?'install prefix required'}
@@ -51,6 +51,20 @@ esac
     --disable-python --disable-zeekctl --enable-static-binpac \
     --enable-static-broker --generator=Ninja --osx-min-version=10.14
 $sudo ninja -C build scripts/install/strip src/install/strip
+
+# Add additional community Zeek scripts
+$sudo pip install zkg==2.1.2
+declare -a ADDED_ZSCRIPTS=(
+    'https://github.com/salesforce/hassh#cfa2315'
+    'https://github.com/salesforce/ja3#133f2a1'
+)
+for ZSCRIPT in "${ADDED_ZSCRIPTS[@]}"; do
+    REPO=$(echo "$ZSCRIPT" | cut -f1 -d#)
+    NAME=$(echo "$ZSCRIPT" | sed 's/^.*\///' | sed 's/#.*$//')
+    COMMIT=$(echo "$ZSCRIPT" | cut -f2 -d#)
+    $sudo zkg --configfile brim/zkg-config install "$REPO" --force --version "$COMMIT"
+    $sudo bash -c "echo \"@load ./$NAME # $ZSCRIPT\" >> /usr/local/zeek/share/zeek/site/local.zeek"
+done
 
 mkdir -p zeek/bin zeek/share/zeek
 cp brim/zeekrunner$exe zeek

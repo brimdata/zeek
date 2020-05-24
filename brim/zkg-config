@@ -1,0 +1,7 @@
+[sources]
+zeek = https://github.com/zeek/packages
+
+[paths]
+state_dir = /tmp/.zkg
+script_dir = /usr/local/zeek/share/zeek/site
+plugin_dir = /usr/local/zeek/lib/zeek/plugins
