@@ -46,6 +46,11 @@ jobs:
       - if: startsWith(matrix.os, 'windows-')
         run: echo '::add-path::C:\msys64\usr\bin'
 
+      # Windows doesn't normally have a directory called \tmp. We make one
+      # so Zeek Package Manager has a place to write config.
+      - if: startsWith(matrix.os, 'windows-')
+        run: mkdir '\tmp'
+
       # actions/checkout@v2 chokes on Windows because Git for Windows'
       # git.exe can't handle Zeek's aux directory.  Use MSYS2's git.exe
       # on Windows until the aux directory is renamed.
