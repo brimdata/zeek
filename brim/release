@@ -55,6 +55,7 @@ $sudo ninja -C build scripts/install/strip src/install/strip
 # Add additional community Zeek scripts
 $sudo pip install git+https://github.com/philrz/package-manager.git
 
+mv brim/zkg-config /
 declare -a ADDED_ZSCRIPTS=(
     'https://github.com/salesforce/hassh#cfa2315'
     'https://github.com/salesforce/ja3#133f2a1'
@@ -63,7 +64,7 @@ for ZSCRIPT in "${ADDED_ZSCRIPTS[@]}"; do
     REPO=$(echo "$ZSCRIPT" | cut -f1 -d#)
     NAME=$(echo "$ZSCRIPT" | sed 's/^.*\///' | sed 's/#.*$//')
     COMMIT=$(echo "$ZSCRIPT" | cut -f2 -d#)
-    $sudo zkg --config brim/zkg-config install "$REPO" --force --version "$COMMIT"
+    $sudo zkg --config /zkg-config install "$REPO" --force --version "$COMMIT"
     $sudo bash -c "echo \"@load ./$NAME # $ZSCRIPT\" >> /usr/local/zeek/share/zeek/site/local.zeek"
 done
 
