@@ -1,3 +1,3 @@
 [paths]
-script_dir = /msys64/usr/local/zeek/share/zeek/site
-plugin_dir = /msys64/usr/local/zeek/lib/zeek/plugins
+script_dir = /usr/local/zeek/share/zeek/site
+plugin_dir = /usr/local/zeek/lib/zeek/plugins
