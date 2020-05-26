@@ -52,6 +52,13 @@ esac
     --enable-static-broker --generator=Ninja --osx-min-version=10.14
 $sudo ninja -C build scripts/install/strip src/install/strip
 
+mkdir -p zeek/bin zeek/share/zeek
+cp brim/zeekrunner$exe zeek
+cp /usr/local/zeek/bin/zeek$exe zeek/bin
+for d in base policy site; do
+    cp -R /usr/local/zeek/share/zeek/$d zeek/share/zeek
+done
+
 # Add additional community Zeek scripts
 $sudo pip install git+https://github.com/philrz/package-manager.git
 
@@ -67,17 +74,11 @@ for ZSCRIPT in "${ADDED_ZSCRIPTS[@]}"; do
     NAME=$(echo "$ZSCRIPT" | sed 's/^.*\///' | sed 's/#.*$//')
     COMMIT=$(echo "$ZSCRIPT" | cut -f2 -d#)
     $sudo zkg -vvv --config brim/zkg-config install "$REPO" --force --version "$COMMIT"
-    $sudo bash -c "echo \"@load ./$NAME # $ZSCRIPT\" >> /usr/local/zeek/share/zeek/site/local.zeek"
+    $sudo bash -c "echo \"@load ./$NAME # $ZSCRIPT\" >> zeek/share/zeek/site/site/local.zeek"
 done
 
 ls -alR /usr/local/zeek/share/zeek
-
-mkdir -p zeek/bin zeek/share/zeek
-cp brim/zeekrunner$exe zeek
-cp /usr/local/zeek/bin/zeek$exe zeek/bin
-for d in base policy site; do
-    cp -R /usr/local/zeek/share/zeek/$d zeek/share/zeek
-done
+ls -alR /d/a/zeek/zeek/zeek/share/zeek
 
 echo "Real path for zeek dir about to be zipped:"
 realpath zeek/share/zeek/site
