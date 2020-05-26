@@ -85,6 +85,5 @@ event Intel::log_intel(rec: Intel::Info)
 
 event Cluster::node_down(name: string, id: string)
 	{
-	# Cascading termination
 	terminate();
 	}

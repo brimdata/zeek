@@ -2,8 +2,10 @@
 
 #include "zeek-config.h"
 
-#include "Var.h"
 #include "NetVar.h"
+#include "Var.h"
+#include "EventHandler.h"
+#include "Val.h"
 
 RecordType* conn_id;
 RecordType* endpoint;
@@ -73,8 +75,10 @@ bool tcp_content_deliver_all_resp;
 
 TableVal* udp_content_delivery_ports_orig;
 TableVal* udp_content_delivery_ports_resp;
+TableVal* udp_content_ports;
 bool udp_content_deliver_all_orig;
 bool udp_content_deliver_all_resp;
+bool udp_content_delivery_ports_use_resp;
 
 double dns_session_timeout;
 double rpc_timeout;
@@ -164,6 +168,7 @@ RecordType* irc_join_info;
 int dpd_reassemble_first_packets;
 int dpd_buffer_size;
 int dpd_match_only_beginning;
+int dpd_late_match_stop;
 int dpd_ignore_ports;
 
 TableVal* likely_server_ports;
@@ -195,6 +200,7 @@ bro_uint_t bits_per_uid;
 #include "types.bif.netvar_def"
 #include "event.bif.netvar_def"
 #include "reporter.bif.netvar_def"
+#include "supervisor.bif.netvar_def"
 
 void init_event_handlers()
 	{
@@ -239,6 +245,7 @@ void init_net_var()
 #include "const.bif.netvar_init"
 #include "types.bif.netvar_init"
 #include "reporter.bif.netvar_init"
+#include "supervisor.bif.netvar_init"
 
 	conn_id = internal_type("conn_id")->AsRecordType();
 	endpoint = internal_type("endpoint")->AsRecordType();
@@ -314,10 +321,14 @@ void init_net_var()
 		internal_val("udp_content_delivery_ports_orig")->AsTableVal();
 	udp_content_delivery_ports_resp =
 		internal_val("udp_content_delivery_ports_resp")->AsTableVal();
+	udp_content_ports =
+		internal_val("udp_content_ports")->AsTableVal();
 	udp_content_deliver_all_orig =
 		bool(internal_val("udp_content_deliver_all_orig")->AsBool());
 	udp_content_deliver_all_resp =
 		bool(internal_val("udp_content_deliver_all_resp")->AsBool());
+	udp_content_delivery_ports_use_resp =
+		bool(internal_val("udp_content_delivery_ports_use_resp")->AsBool());
 
 	dns_session_timeout = opt_internal_double("dns_session_timeout");
 	rpc_timeout = opt_internal_double("rpc_timeout");
@@ -406,6 +417,7 @@ void init_net_var()
 		opt_internal_int("dpd_reassemble_first_packets");
 	dpd_buffer_size = opt_internal_int("dpd_buffer_size");
 	dpd_match_only_beginning = opt_internal_int("dpd_match_only_beginning");
+	dpd_late_match_stop = opt_internal_int("dpd_late_match_stop");
 	dpd_ignore_ports = opt_internal_int("dpd_ignore_ports");
 
 	likely_server_ports = internal_val("likely_server_ports")->AsTableVal();

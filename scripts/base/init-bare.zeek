@@ -11,6 +11,13 @@
 ##    directly and then remove this alias.
 type string_array: table[count] of string;
 
+## A string-table of any.
+##
+## .. todo:: We need this type definition only for declaring builtin functions
+##    via ``bifcl``. We should extend ``bifcl`` to understand composite types
+##    directly and then remove this alias.
+type string_any_table: table[string] of any;
+
 ## A set of strings.
 ##
 ## .. todo:: We need this type definition only for declaring builtin functions
@@ -119,6 +126,19 @@ type mime_match: record {
 ##
 ## :zeek:see:`file_magic`
 type mime_matches: vector of mime_match;
+
+## Properties of an I/O packet source being read by Zeek.
+type PacketSource: record {
+	## Whether the packet source is a live interface or offline pcap file.
+	live: bool;
+	## The interface name for a live interface or filesystem path of
+	## an offline pcap file.
+	path: string;
+	## The data link-layer type of the packet source.
+	link_type: int;
+	## The netmask assoicated with the source or ``NETMASK_UNKNOWN``.
+	netmask: count;
+};
 
 ## A connection's transport-layer protocol. Note that Zeek uses the term
 ## "connection" broadly, using flow semantics for ICMP and UDP.
@@ -296,6 +316,39 @@ type endpoint_stats: record {
 	endian_type: count;
 };
 
+module TCP;
+export {
+	## A TCP Option field parsed from a TCP header.
+	type Option: record {
+		## The kind number associated with the option.  Other optional fields
+		## of this record may be set depending on this value.
+		kind: count;
+		## The total length of the option in bytes, including the kind byte and
+		## length byte (if present).
+		length: count;
+		## This field is set to the raw option bytes if the kind is not
+		## otherwise known/parsed.  It's also set for known kinds whose length
+		## was invalid.
+		data: string &optional;
+		## Kind 2: Maximum Segment Size.
+		mss: count &optional;
+		## Kind 3: Window scale.
+		window_scale: count &optional;
+		## Kind 5: Selective ACKnowledgement (SACK).  This is a list of 2, 4,
+		## 6, or 8 numbers with each consecutive pair being a 32-bit
+		## begin-pointer and 32-bit end pointer.
+		sack: index_vec &optional;
+		## Kind 8: 4-byte sender timestamp value.
+		send_timestamp: count &optional;
+		## Kind 8: 4-byte echo reply timestamp value.
+		echo_timestamp: count &optional;
+	};
+
+	## The full list of TCP Option fields parsed from a TCP header.
+	type OptionList: vector of Option;
+}
+module GLOBAL;
+
 module Tunnel;
 export {
 	## Records the identity of an encapsulating parent of a tunneled connection.
@@ -386,6 +439,11 @@ type connection: record {
 
 	## The inner VLAN, if applicable for this connection.
 	inner_vlan: int &optional;
+
+	## Flag that will be true if :zeek:see:`connection_successful` has
+	## already been generated for the connection. See the documentation of
+	## that event for a definition of what makes a connection "succesful".
+	successful: bool;
 };
 
 ## Default amount of time a file can be inactive before the file analysis
@@ -454,6 +512,13 @@ type fa_file: record {
 	bof_buffer: string &optional;
 } &redef;
 
+## A hook taking a fa_file, an any, and a string. Used by the X509 analyzer as callback.
+##
+## .. todo:: We need this type definition only for declaring builtin functions
+##    via ``bifcl``. We should extend ``bifcl`` to understand composite types
+##    directly and then remove this alias.
+type string_any_file_hook: hook(f: fa_file, e: any, str: string);
+
 ## Metadata that's been inferred about a particular file.
 type fa_metadata: record {
 	## The strongest matching MIME type if one was discovered.
@@ -497,7 +562,6 @@ type NetStats: record {
 type ConnStats: record {
 	total_conns: count;           ##<
 	current_conns: count;         ##<
-	current_conns_extern: count;  ##<
 	sess_current_conns: count;    ##<
 
 	num_packets: count;
@@ -1052,6 +1116,7 @@ const tcp_content_deliver_all_resp = F &redef;
 ##    tcp_content_deliver_all_orig tcp_content_deliver_all_resp
 ##    udp_content_delivery_ports_resp  udp_content_deliver_all_orig
 ##    udp_content_deliver_all_resp  udp_contents
+##    udp_content_delivery_ports_use_resp udp_content_ports
 const udp_content_delivery_ports_orig: table[port] of bool = {} &redef;
 
 ## Defines UDP destination ports for which the contents of the responder stream
@@ -1061,7 +1126,25 @@ const udp_content_delivery_ports_orig: table[port] of bool = {} &redef;
 ##    tcp_content_delivery_ports_resp tcp_content_deliver_all_orig
 ##    tcp_content_deliver_all_resp udp_content_delivery_ports_orig
 ##    udp_content_deliver_all_orig udp_content_deliver_all_resp udp_contents
+##    udp_content_delivery_ports_use_resp udp_content_ports
 const udp_content_delivery_ports_resp: table[port] of bool = {} &redef;
+
+## Defines UDP ports (source or destination) for which the contents of
+## either originator or responder streams should be delivered via
+## :zeek:see:`udp_contents`.
+##
+## .. zeek:see:: tcp_content_delivery_ports_orig
+##    tcp_content_delivery_ports_resp tcp_content_deliver_all_orig
+##    tcp_content_deliver_all_resp udp_content_delivery_ports_orig
+##    udp_content_deliver_all_orig udp_content_deliver_all_resp udp_contents
+##    udp_content_delivery_ports_use_resp udp_content_delivery_ports_resp
+option udp_content_ports: set[port] = {};
+
+## Whether ports given in :zeek:see:`udp_content_delivery_ports_orig`
+## and :zeek:see:`udp_content_delivery_ports_resp` are in terms of
+## UDP packet's destination port or the UDP connection's "responder"
+## port.
+option udp_content_delivery_ports_use_resp = F;
 
 ## If true, all UDP originator-side traffic is reported via
 ## :zeek:see:`udp_contents`.
@@ -1071,6 +1154,7 @@ const udp_content_delivery_ports_resp: table[port] of bool = {} &redef;
 ##    tcp_content_delivery_ports_orig udp_content_delivery_ports_orig
 ##    udp_content_delivery_ports_resp  udp_content_deliver_all_resp
 ##    udp_contents
+##    udp_content_delivery_ports_use_resp
 const udp_content_deliver_all_orig = F &redef;
 
 ## If true, all UDP responder-side traffic is reported via
@@ -1081,6 +1165,7 @@ const udp_content_deliver_all_orig = F &redef;
 ##    tcp_content_delivery_ports_orig udp_content_delivery_ports_orig
 ##    udp_content_delivery_ports_resp  udp_content_deliver_all_orig
 ##    udp_contents
+##    udp_content_delivery_ports_use_resp
 const udp_content_deliver_all_resp = F &redef;
 
 ## Check for expired table entries after this amount of time.
@@ -1502,7 +1587,8 @@ type tcp_hdr: record {
 	ack: count;		##< acknowledgement number
 	hl: count;		##< header length (in bytes)
 	dl: count;		##< data length (xxx: not in original tcphdr!)
-	flags: count;		##< flags
+	reserved: count;	##< The "reserved" 4 bits after the "data offset" field.
+	flags: count;		##< The 8 bits of flags after the "reserved" field.
 	win: count;		##< window
 };
 
@@ -1781,6 +1867,8 @@ type gtp_delete_pdp_ctx_response_elements: record {
 @load base/bif/reporter.bif
 @load base/bif/strings.bif
 @load base/bif/option.bif
+@load base/frameworks/supervisor/api
+@load base/bif/supervisor.bif
 
 global done_with_network = F;
 event net_done(t: time) { done_with_network = T; }
@@ -1988,7 +2076,8 @@ global login_timeouts: set[string] &redef;
 ##
 ## .. zeek:see:: mime_header_list http_all_headers mime_all_headers mime_one_header
 type mime_header_rec: record {
-	name: string;	##< The header name.
+	original_name: string; ##< The header name (unaltered).
+	name: string;	##< The header name (converted to all upper-case).
 	value: string;	##< The header value.
 };
 
@@ -2546,7 +2635,7 @@ export {
 		negotiate_lm_key       : bool;
 		## If set, requests connectionless authentication
 		negotiate_datagram     : bool;
-		## If set, requests session key negotiation for message 
+		## If set, requests session key negotiation for message
 		## confidentiality
 		negotiate_seal         : bool;
 		## If set, requests session key negotiation for message
@@ -2734,7 +2823,7 @@ export {
 		## The server supports compressed data transfer. Requires bulk_transfer.
 		## Note: No known implementations support this
 		compressed_data	   : bool;
-		## The server supports extended security exchanges	
+		## The server supports extended security exchanges
 		extended_security  : bool;
 	};
 
@@ -2827,7 +2916,7 @@ export {
 	};
 
 	type SMB1::NegotiateResponse: record {
-		## If the server does not understand any of the dialect strings, or if 
+		## If the server does not understand any of the dialect strings, or if
 		## PC NETWORK PROGRAM 1.0 is the chosen dialect.
 		core	: SMB1::NegotiateResponseCore 	&optional;
 		## If the chosen dialect is greater than core up to and including
@@ -2878,7 +2967,7 @@ export {
 		## If challenge/response auth is not being used, this is the password.
 		## Otherwise, it's the response to the server's challenge.
 		## Note: Only set for pre NT LM 0.12
-		account_password	  : string &optional;		
+		account_password	  : string &optional;
 		## Client's primary domain, if known
 		## Note: not set for NT LM 0.12 with extended security
 		primary_domain		  : string &optional;
@@ -2896,7 +2985,7 @@ export {
 		## Note: only set for NT LM 0.12
 		capabilities		  : SMB1::SessionSetupAndXCapabilities &optional;
 	};
-	
+
 	type SMB1::SessionSetupAndXResponse: record {
 		## Count of parameter words (should be 3 for pre NT LM 0.12 and 4 for NT LM 0.12)
 		word_count	: count;
@@ -3961,7 +4050,7 @@ type bt_tracker_headers: table[string] of string;
 ## for a range of modbus coils.
 type ModbusCoils: vector of bool;
 
-## A vector of count values that represent 16bit modbus 
+## A vector of count values that represent 16bit modbus
 ## register values.
 type ModbusRegisters: vector of count;
 
@@ -4684,6 +4773,18 @@ const dpd_buffer_size = 1024 &redef;
 ##    only signatures used for dynamic protocol detection.
 const dpd_match_only_beginning = T &redef;
 
+## If true, stops signature matching after a late match. A late match may occur
+## in case the DPD buffer is exhausted but a protocol signature matched. To
+## allow late matching, :zeek:see:`dpd_match_only_beginning` must be disabled.
+##
+## .. zeek:see:: dpd_reassemble_first_packets dpd_buffer_size
+##    dpd_match_only_beginning
+##
+## .. note:: Despite the name, this option stops *all* signature matching, not
+##    only signatures used for dynamic protocol detection but is triggered by
+##    DPD signatures only.
+const dpd_late_match_stop = F &redef;
+
 ## If true, don't consider any ports for deciding which protocol analyzer to
 ## use.
 ##
@@ -5163,9 +5264,11 @@ const global_hash_seed: string = "" &redef;
 ## The maximum is currently 128 bits.
 const bits_per_uid: count = 96 &redef;
 
-## Whether usage of the old communication system is considered an error or
-## not.  The default Zeek configuration no longer works with the non-Broker
-## communication system unless you have manually taken action to initialize
-## and set up the old comm. system.  Deprecation warnings are still emitted
-## when setting this flag, but they will not result in a fatal error.
-const old_comm_usage_is_ok: bool = F &redef;
+## This salt value is used for several message digests in Zeek. We
+## use a salt to help mitigate the possibility of an attacker
+## manipulating source data to, e.g., mount complexity attacks or
+## cause ID collisions.
+## This salt is, for example, used by :zeek:see:`get_file_handle`
+## to generate installation-unique file IDs (the *id* field of :zeek:see:`fa_file`).
+const digest_salt = "Please change this value." &redef;
+

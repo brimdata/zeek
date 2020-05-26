@@ -1,17 +1,18 @@
 // See the file "COPYING" in the main distribution directory for copyright.
 
-#include <stdlib.h>
-
-#include <algorithm>
-
 #include "zeek-config.h"
+#include "RPC.h"
+
+#include <string>
 
 #include "NetVar.h"
 #include "XDR.h"
-#include "RPC.h"
+#include "Reporter.h"
 #include "Sessions.h"
 
 #include "events.bif.h"
+
+#include <stdlib.h>
 
 using namespace analyzer::rpc;
 
@@ -25,7 +26,7 @@ namespace { // local namespace
 #define MAX_RPC_LEN 65536
 
 
-RPC_CallInfo::RPC_CallInfo(uint32 arg_xid, const u_char*& buf, int& n, double arg_start_time, double arg_last_time, int arg_rpc_len)
+RPC_CallInfo::RPC_CallInfo(uint32_t arg_xid, const u_char*& buf, int& n, double arg_start_time, double arg_last_time, int arg_rpc_len)
 	{
 	v = nullptr;
 	xid = arg_xid;
@@ -100,42 +101,40 @@ RPC_CallInfo::~RPC_CallInfo()
 	Unref(v);
 	}
 
-int RPC_CallInfo::CompareRexmit(const u_char* buf, int n) const
+bool RPC_CallInfo::CompareRexmit(const u_char* buf, int n) const
 	{
 	if ( n != call_n )
-		return 0;
+		return false;
 
 	return memcmp((const void*) call_buf, (const void*) buf, call_n) == 0;
 	}
 
 
-void rpc_callinfo_delete_func(void* v)
-	{
-	delete (RPC_CallInfo*) v;
-	}
-
 RPC_Interpreter::RPC_Interpreter(analyzer::Analyzer* arg_analyzer)
 	{
 	analyzer = arg_analyzer;
-	calls.SetDeleteFunc(rpc_callinfo_delete_func);
 	}
 
 RPC_Interpreter::~RPC_Interpreter()
 	{
+	for ( const auto& call : calls )
+		delete call.second;
 	}
 
 int RPC_Interpreter::DeliverRPC(const u_char* buf, int n, int rpclen,
-				int is_orig, double start_time, double last_time)
+				bool is_orig, double start_time, double last_time)
 	{
-	uint32 xid = extract_XDR_uint32(buf, n);
-	uint32 msg_type = extract_XDR_uint32(buf, n);
+	uint32_t xid = extract_XDR_uint32(buf, n);
+	uint32_t msg_type = extract_XDR_uint32(buf, n);
 	int rpc_len = n;
 
 	if ( ! buf )
 		return 0;
 
-	HashKey h(&xid, 1);
-	RPC_CallInfo* call = calls.Lookup(&h);
+	RPC_CallInfo* call = nullptr;
+	auto iter = calls.find(xid);
+	if ( iter != calls.end() )
+		call = iter->second;
 
 	if ( msg_type == RPC_CALL )
 		{
@@ -175,7 +174,7 @@ int RPC_Interpreter::DeliverRPC(const u_char* buf, int n, int rpclen,
 				return 0;
 				}
 
-			calls.Insert(&h, call);
+			calls[xid] = call;
 			}
 
 		// We now have a valid RPC_CallInfo (either the previous one
@@ -197,7 +196,7 @@ int RPC_Interpreter::DeliverRPC(const u_char* buf, int n, int rpclen,
 		if ( is_orig )
 			Weird("originator_RPC_reply");
 
-		uint32 reply_stat = extract_XDR_uint32(buf, n);
+		uint32_t reply_stat = extract_XDR_uint32(buf, n);
 		if ( ! buf )
 			return 0;
 
@@ -206,7 +205,7 @@ int RPC_Interpreter::DeliverRPC(const u_char* buf, int n, int rpclen,
 		if ( reply_stat == RPC_MSG_ACCEPTED )
 			{
 			(void) skip_XDR_opaque_auth(buf, n);
-			uint32 accept_stat = extract_XDR_uint32(buf, n);
+			uint32_t accept_stat = extract_XDR_uint32(buf, n);
 
 			// The first members of BifEnum::RPC_* correspond
 			// to accept_stat.
@@ -228,7 +227,7 @@ int RPC_Interpreter::DeliverRPC(const u_char* buf, int n, int rpclen,
 
 		else if ( reply_stat == RPC_MSG_DENIED )
 			{
-			uint32 reject_stat = extract_XDR_uint32(buf, n);
+			uint32_t reject_stat = extract_XDR_uint32(buf, n);
 			if ( ! buf )
 				return 0;
 
@@ -285,7 +284,8 @@ int RPC_Interpreter::DeliverRPC(const u_char* buf, int n, int rpclen,
 
 			Event_RPC_Dialogue(call, status, n);
 
-			delete calls.RemoveEntry(&h);
+			calls.erase(xid);
+			delete call;
 			}
 		else
 			{
@@ -319,11 +319,9 @@ int RPC_Interpreter::DeliverRPC(const u_char* buf, int n, int rpclen,
 
 void RPC_Interpreter::Timeout()
 	{
-	IterCookie* cookie = calls.InitForIteration();
-	RPC_CallInfo* c;
-
-	while ( (c = calls.NextEntry(cookie)) )
+	for ( const auto& entry : calls )
 		{
+		RPC_CallInfo* c = entry.second;
 		Event_RPC_Dialogue(c, BifEnum::RPC_TIMEOUT, 0);
 
 		if ( c->IsValidCall() )
@@ -340,46 +338,40 @@ void RPC_Interpreter::Timeout()
 void RPC_Interpreter::Event_RPC_Dialogue(RPC_CallInfo* c, BifEnum::rpc_status status, int reply_len)
 	{
 	if ( rpc_dialogue )
-		{
-		analyzer->ConnectionEventFast(rpc_dialogue, {
-			analyzer->BuildConnVal(),
-			val_mgr->GetCount(c->Program()),
-			val_mgr->GetCount(c->Version()),
-			val_mgr->GetCount(c->Proc()),
+		analyzer->EnqueueConnEvent(rpc_dialogue,
+			analyzer->ConnVal(),
+			val_mgr->Count(c->Program()),
+			val_mgr->Count(c->Version()),
+			val_mgr->Count(c->Proc()),
 			BifType::Enum::rpc_status->GetVal(status),
-			new Val(c->StartTime(), TYPE_TIME),
-			val_mgr->GetCount(c->CallLen()),
-			val_mgr->GetCount(reply_len),
-		});
-		}
+			make_intrusive<Val>(c->StartTime(), TYPE_TIME),
+			val_mgr->Count(c->CallLen()),
+			val_mgr->Count(reply_len)
+		);
 	}
 
 void RPC_Interpreter::Event_RPC_Call(RPC_CallInfo* c)
 	{
 	if ( rpc_call )
-		{
-		analyzer->ConnectionEventFast(rpc_call, {
-			analyzer->BuildConnVal(),
-			val_mgr->GetCount(c->XID()),
-			val_mgr->GetCount(c->Program()),
-			val_mgr->GetCount(c->Version()),
-			val_mgr->GetCount(c->Proc()),
-			val_mgr->GetCount(c->CallLen()),
-		});
-		}
+		analyzer->EnqueueConnEvent(rpc_call,
+			analyzer->ConnVal(),
+			val_mgr->Count(c->XID()),
+			val_mgr->Count(c->Program()),
+			val_mgr->Count(c->Version()),
+			val_mgr->Count(c->Proc()),
+			val_mgr->Count(c->CallLen())
+		);
 	}
 
 void RPC_Interpreter::Event_RPC_Reply(uint32_t xid, BifEnum::rpc_status status, int reply_len)
 	{
 	if ( rpc_reply )
-		{
-		analyzer->ConnectionEventFast(rpc_reply, {
-			analyzer->BuildConnVal(),
-			val_mgr->GetCount(xid),
+		analyzer->EnqueueConnEvent(rpc_reply,
+			analyzer->ConnVal(),
+			val_mgr->Count(xid),
 			BifType::Enum::rpc_status->GetVal(status),
-			val_mgr->GetCount(reply_len),
-		});
-		}
+			val_mgr->Count(reply_len)
+		);
 	}
 
 void RPC_Interpreter::Weird(const char* msg, const char* addl)
@@ -402,14 +394,14 @@ bool RPC_Reasm_Buffer::ConsumeChunk(const u_char*& data, int& len)
 	// How many bytes do we want to process with this call?  Either the
 	// all of the bytes available or the number of bytes that we are
 	// still missing.
-	int64_t to_process = min(int64_t(len), (expected-processed));
+	int64_t to_process = std::min(int64_t(len), (expected-processed));
 
 	if ( fill < maxsize )
 		{
 		// We haven't yet filled the buffer. How many bytes to copy
 		// into the buff. Either all of the bytes we want to process
 		// or the number of bytes until we reach maxsize.
-		int64_t to_copy = min( to_process, (maxsize-fill) );
+		int64_t to_copy = std::min( to_process, (maxsize-fill) );
 		if ( to_copy )
 			memcpy(buf+fill, data, to_copy);
 
@@ -443,7 +435,7 @@ Contents_RPC::~Contents_RPC()
 	{
 	}
 
-void Contents_RPC::Undelivered(uint64 seq, int len, bool orig)
+void Contents_RPC::Undelivered(uint64_t seq, int len, bool orig)
 	{
 	tcp::TCP_SupportAnalyzer::Undelivered(seq, len, orig);
 	NeedResync();
@@ -451,18 +443,18 @@ void Contents_RPC::Undelivered(uint64 seq, int len, bool orig)
 
 bool Contents_RPC::CheckResync(int& len, const u_char*& data, bool orig)
 	{
-	uint32 frame_len;
+	uint32_t frame_len;
 	bool last_frag;
-	uint32 xid;
-	uint32 frame_type;
+	uint32_t xid;
+	uint32_t frame_type;
 
 	bool discard_this_chunk = false;
 
 	if ( resync_state == RESYNC_INIT )
-		{ 
+		{
 		// First time CheckResync is called. If the TCP endpoint
-		// is fully established we are in sync (since it's the first chunk 
-		// of data after the SYN if its not established we need to 
+		// is fully established we are in sync (since it's the first chunk
+		// of data after the SYN if its not established we need to
 		// resync.
 		tcp::TCP_Analyzer* tcp =
 			static_cast<tcp::TCP_ApplicationAnalyzer*>(Parent())->TCP();
@@ -632,7 +624,7 @@ bool Contents_RPC::CheckResync(int& len, const u_char*& data, bool orig)
 void Contents_RPC::DeliverStream(int len, const u_char* data, bool orig)
 	{
 	tcp::TCP_SupportAnalyzer::DeliverStream(len, data, orig);
-	uint32 marker;
+	uint32_t marker;
 	bool last_frag;
 
 	if ( ! CheckResync(len, data, orig) )
@@ -655,7 +647,7 @@ void Contents_RPC::DeliverStream(int len, const u_char* data, bool orig)
 			// know yet how much we expect, so we set expected to
 			// 0.
 			msg_buf.Init(MAX_RPC_LEN, 0);
-			last_frag = 0;
+			last_frag = false;
 			state = WAIT_FOR_MARKER;
 			start_time = network_time;
 			// no break. fall through
@@ -737,7 +729,7 @@ RPC_Analyzer::RPC_Analyzer(const char* name, Connection* conn,
 	{
 	if ( Conn()->ConnTransport() == TRANSPORT_UDP )
 		ADD_ANALYZER_TIMER(&RPC_Analyzer::ExpireTimer,
-			network_time + rpc_timeout, 1, TIMER_RPC_EXPIRE);
+			network_time + rpc_timeout, true, TIMER_RPC_EXPIRE);
 	}
 
 RPC_Analyzer::~RPC_Analyzer()
@@ -746,19 +738,19 @@ RPC_Analyzer::~RPC_Analyzer()
 	}
 
 void RPC_Analyzer::DeliverPacket(int len, const u_char* data, bool orig,
-					uint64 seq, const IP_Hdr* ip, int caplen)
+					uint64_t seq, const IP_Hdr* ip, int caplen)
 	{
 	tcp::TCP_ApplicationAnalyzer::DeliverPacket(len, data, orig, seq, ip, caplen);
-	len = min(len, caplen);
+	len = std::min(len, caplen);
 
 	if ( orig )
 		{
-		if ( ! interp->DeliverRPC(data, len, len, 1, network_time, network_time) )
+		if ( ! interp->DeliverRPC(data, len, len, true, network_time, network_time) )
 			Weird("bad_RPC");
 		}
 	else
 		{
-		if ( ! interp->DeliverRPC(data, len, len, 0, network_time, network_time) )
+		if ( ! interp->DeliverRPC(data, len, len, false, network_time, network_time) )
 			Weird("bad_RPC");
 		}
 	}

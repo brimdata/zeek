@@ -1,7 +1,6 @@
 // See the file "COPYING" in the main distribution directory for copyright.
 
-#ifndef netvar_h
-#define netvar_h
+#pragma once
 
 #include "Val.h"
 #include "Func.h"
@@ -76,8 +75,10 @@ extern bool tcp_content_deliver_all_resp;
 
 extern TableVal* udp_content_delivery_ports_orig;
 extern TableVal* udp_content_delivery_ports_resp;
+extern TableVal* udp_content_ports;
 extern bool udp_content_deliver_all_orig;
 extern bool udp_content_deliver_all_resp;
+extern bool udp_content_delivery_ports_use_resp;
 
 extern double dns_session_timeout;
 extern double rpc_timeout;
@@ -166,6 +167,7 @@ extern RecordType* irc_join_info;
 extern int dpd_reassemble_first_packets;
 extern int dpd_buffer_size;
 extern int dpd_match_only_beginning;
+extern int dpd_late_match_stop;
 extern int dpd_ignore_ports;
 
 extern TableVal* likely_server_ports;
@@ -203,5 +205,4 @@ extern void init_net_var();
 #include "types.bif.netvar_h"
 #include "event.bif.netvar_h"
 #include "reporter.bif.netvar_h"
-
-#endif
+#include "supervisor.bif.netvar_h"

@@ -1,12 +1,12 @@
 // See the file "COPYING" in the main distribution directory for copyright.
 
-#include <typeinfo>
+#include "BloomFilter.h"
+
 #include <cmath>
 #include <limits>
 
+#include <broker/data.hh>
 #include <broker/error.hh>
-
-#include "BloomFilter.h"
 
 #include "CounterVector.h"
 
@@ -17,7 +17,7 @@ using namespace probabilistic;
 
 BloomFilter::BloomFilter()
 	{
-	hasher = 0;
+	hasher = nullptr;
 	}
 
 BloomFilter::BloomFilter(const Hasher* arg_hasher)
@@ -42,7 +42,7 @@ broker::expected<broker::data> BloomFilter::Serialize() const
 	if ( ! d )
 		return broker::ec::invalid_data; // Cannot serialize
 
-	return {broker::vector{static_cast<uint64>(Type()), std::move(*h), std::move(*d)}};
+	return {broker::vector{static_cast<uint64_t>(Type()), std::move(*h), std::move(*d)}};
 	}
 
 std::unique_ptr<BloomFilter> BloomFilter::Unserialize(const broker::data& data)
@@ -52,7 +52,7 @@ std::unique_ptr<BloomFilter> BloomFilter::Unserialize(const broker::data& data)
 	if ( ! (v && v->size() == 3) )
 		return nullptr;
 
-	auto type = caf::get_if<uint64>(&(*v)[0]);
+	auto type = caf::get_if<uint64_t>(&(*v)[0]);
 	if ( ! type )
 		return nullptr;
 
@@ -142,7 +142,7 @@ std::string BasicBloomFilter::InternalState() const
 
 BasicBloomFilter::BasicBloomFilter()
 	{
-	bits = 0;
+	bits = nullptr;
 	}
 
 BasicBloomFilter::BasicBloomFilter(const Hasher* hasher, size_t cells)
@@ -195,7 +195,7 @@ bool BasicBloomFilter::DoUnserialize(const broker::data& data)
 
 CountingBloomFilter::CountingBloomFilter()
 	{
-	cells = 0;
+	cells = nullptr;
 	}
 
 CountingBloomFilter::CountingBloomFilter(const Hasher* hasher,
@@ -254,7 +254,7 @@ CountingBloomFilter* CountingBloomFilter::Clone() const
 	return copy;
 	}
 
-string CountingBloomFilter::InternalState() const
+std::string CountingBloomFilter::InternalState() const
 	{
 	return fmt("%" PRIu64, cells->Hash());
 	}

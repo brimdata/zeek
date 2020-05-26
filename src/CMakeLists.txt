@@ -13,10 +13,6 @@ set(bro_REGISTER_BIFS CACHE INTERNAL "BIFs for automatic registering" FORCE)
 set(bro_BASE_BIF_SCRIPTS CACHE INTERNAL "Zeek script stubs for BIFs in base distribution of Zeek" FORCE)
 set(bro_PLUGIN_BIF_SCRIPTS CACHE INTERNAL "Zeek script stubs for BIFs in Zeek plugins" FORCE)
 
-# If TRUE, use CMake's object libraries for sub-directories instead of
-# static libraries. This requires CMake >= 2.8.8.
-set(bro_HAVE_OBJECT_LIBRARIES FALSE)
-
 configure_file(version.c.in ${CMAKE_CURRENT_BINARY_DIR}/version.c)
 configure_file(util-config.h.in ${CMAKE_CURRENT_BINARY_DIR}/util-config.h)
 
@@ -27,14 +23,15 @@ configure_file(util-config.h.in ${CMAKE_CURRENT_BINARY_DIR}/util-config.h)
 # - deletes instances of 'extern char.*getenv' in inFile
 # - writes results to outFile and adds it to list TRANSFORMED_BISON_OUTPUTS
 macro(REPLACE_YY_PREFIX_TARGET inFile outFile yylexPrefix yyPrefix)
-    set(args "'/extern char.*getenv/d")
+    set(args "/extern char.*getenv/d")
     set(args "${args}\;s/yylex/${yylexPrefix}lex/")
-    set(args "${args}\;s/yy/${yyPrefix}/g'" < ${inFile} > ${outFile})
+    set(args "${args}\;s/yy/${yyPrefix}/g" < ${inFile} > ${outFile})
     add_custom_command(OUTPUT ${outFile}
                        COMMAND ${SED_EXE}
                        ARGS ${args}
                        DEPENDS ${inFile}
                        COMMENT "[sed] replacing stuff in ${inFile}"
+                       VERBATIM
     )
     list(APPEND TRANSFORMED_BISON_OUTPUTS ${outFile})
 endmacro(REPLACE_YY_PREFIX_TARGET)
@@ -111,6 +108,11 @@ set(BIF_SRCS
     strings.bif
     reporter.bif
     option.bif
+    # Note: the supervisor BIF file is treated like other top-level BIFs
+    # instead of contained in its own subdirectory CMake logic because
+    # subdirectory BIFs are treated differently and don't support being called
+    # *during* parsing (e.g. within an @if directive).
+    supervisor/supervisor.bif
 )
 
 foreach (bift ${BIF_SRCS})
@@ -139,7 +141,9 @@ list(APPEND BINPAC_OUTPUTS "${BINPAC_OUTPUT_CC}")
 ########################################################################
 
 set(bro_SUBDIR_LIBS CACHE INTERNAL "subdir libraries" FORCE)
+set(bro_SUBDIR_DEPS CACHE INTERNAL "subdir dependencies" FORCE)
 set(bro_PLUGIN_LIBS CACHE INTERNAL "plugin libraries" FORCE)
+set(bro_PLUGIN_DEPS CACHE INTERNAL "plugin dependencies" FORCE)
 
 add_subdirectory(analyzer)
 add_subdirectory(broker)
@@ -149,26 +153,11 @@ add_subdirectory(input)
 add_subdirectory(iosource)
 add_subdirectory(logging)
 add_subdirectory(probabilistic)
+if (WIN32)
+    add_subdirectory(windows)
+endif ()
 
-set(bro_SUBDIRS
-    # Order is important here.
-    ${bro_PLUGIN_LIBS}
-    ${bro_SUBDIR_LIBS}
-)
-
-if ( NOT bro_HAVE_OBJECT_LIBRARIES )
-    foreach (_plugin ${bro_PLUGIN_LIBS})
-        string(REGEX REPLACE "plugin-" "" _plugin "${_plugin}")
-        string(REGEX REPLACE "-" "_" _plugin "${_plugin}")
-        set(_decl "namespace plugin { namespace ${_plugin} { class Plugin; extern Plugin plugin; } };")
-        set(_use "i += (size_t)(&(plugin::${_plugin}::plugin));")
-        set(__BRO_DECL_PLUGINS "${__BRO_DECL_PLUGINS}${_decl}\n")
-        set(__BRO_USE_PLUGINS "${__BRO_USE_PLUGINS}${_use}\n")
-    endforeach()
-
-    configure_file(plugins.cc.in ${CMAKE_CURRENT_BINARY_DIR}/plugins.cc)
-    set(PLUGIN_INIT ${CMAKE_CURRENT_BINARY_DIR}/plugins.cc)
-endif()
+add_subdirectory(fuzzers)
 
 ########################################################################
 ## bro target
@@ -221,10 +210,12 @@ set_source_files_properties(nb_dns.c PROPERTIES COMPILE_FLAGS
                             -fno-strict-aliasing)
 
 set(MAIN_SRCS
-    main.cc
+    digest.cc
     net_util.cc
     util.cc
     module_util.cc
+    zeek-affinity.cc
+    zeek-setup.cc
     Anon.cc
     Attr.cc
     Base64.cc
@@ -261,12 +252,14 @@ set(MAIN_SRCS
     IntSet.cc
     IP.cc
     IPAddr.cc
+    List.cc
     Reporter.cc
     NFA.cc
     Net.cc
     NetVar.cc
     Obj.cc
     OpaqueVal.cc
+    Options.cc
     PacketFilter.cc
     Pipe.cc
     PolicyFile.cc
@@ -296,15 +289,16 @@ set(MAIN_SRCS
     Val.cc
     Var.cc
     WeirdState.cc
+    ZeekArgs.cc
     bsd-getopt-long.c
     bro_inet_ntop.c
-    cq.c
     patricia.c
     setsignal.c
     PacketDumper.cc
     strsep.c
     modp_numtoa.c
-    siphash24.c
+
+    supervisor/Supervisor.cc
 
     threading/BasicThread.cc
     threading/Formatter.cc
@@ -328,7 +322,45 @@ set(THIRD_PARTY_SRCS
     3rdparty/sqlite3.c
 )
 
-set(bro_SRCS
+# Highwayhash. Highwayhash is a bit special since it has architecture dependent code...
+
+set(HH_SRCS
+    ../auxi/highwayhash/highwayhash/sip_hash.cc
+    ../auxi/highwayhash/highwayhash/sip_tree_hash.cc
+    ../auxi/highwayhash/highwayhash/scalar_sip_tree_hash.cc
+    ../auxi/highwayhash/highwayhash/arch_specific.cc
+    ../auxi/highwayhash/highwayhash/instruction_sets.cc
+    ../auxi/highwayhash/highwayhash/nanobenchmark.cc
+    ../auxi/highwayhash/highwayhash/os_specific.cc
+    ../auxi/highwayhash/highwayhash/hh_portable.cc
+)
+
+if (${COMPILER_ARCHITECTURE} STREQUAL "arm")
+  set_source_files_properties(${HH_SRCS} PROPERTIES COMPILE_FLAGS
+                              -mfloat-abi=hard -march=armv7-a -mfpu=neon)
+elseif (${COMPILER_ARCHITECTURE} STREQUAL "aarch64")
+  list(APPEND HH_SRCS
+       ../auxi/highwayhash/highwayhash/hh_neon.cc
+  )
+elseif (${COMPILER_ARCHITECTURE} STREQUAL "power")
+  set_source_files_properties(../auxi/highwayhash/highwayhash/hh_avx2.cc PROPERTIES COMPILE_FLAGS
+                              -mvsx)
+  list(APPEND HH_SRCS
+       ../auxi/highwayhash/highwayhash/hh_vsc.cc
+  )
+elseif(${COMPILER_ARCHITECTURE} STREQUAL "x86_64")
+  set_source_files_properties(../auxi/highwayhash/highwayhash/hh_avx2.cc PROPERTIES COMPILE_FLAGS
+                              -mavx2)
+  set_source_files_properties(../auxi/highwayhash/highwayhash/hh_sse41.cc PROPERTIES COMPILE_FLAGS
+                              -msse4.1)
+
+  list(APPEND HH_SRCS
+      ../auxi/highwayhash/highwayhash/hh_avx2.cc
+      ../auxi/highwayhash/highwayhash/hh_sse41.cc
+  )
+endif ()
+
+set(zeek_SRCS
     ${CMAKE_CURRENT_BINARY_DIR}/version.c
     ${BIF_SRCS}
     ${BINPAC_AUXSRC}
@@ -344,20 +376,22 @@ set(bro_SRCS
     ${FLEX_Scanner_INPUT}
     ${BISON_Parser_INPUT}
     ${CMAKE_CURRENT_BINARY_DIR}/DebugCmdConstants.h
-    ${PLUGIN_INIT}
     ${THIRD_PARTY_SRCS}
+    ${HH_SRCS}
     ${MAIN_SRCS}
 )
 
-collect_headers(bro_HEADERS ${bro_SRCS})
+collect_headers(zeek_HEADERS ${zeek_SRCS})
 
-if ( bro_HAVE_OBJECT_LIBRARIES )
-    add_executable(zeek ${bro_SRCS} ${bro_HEADERS} ${bro_SUBDIRS})
-    target_link_libraries(zeek ${zeekdeps} ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS})
-else ()
-    add_executable(zeek ${bro_SRCS} ${bro_HEADERS})
-    target_link_libraries(zeek ${bro_SUBDIRS} ${zeekdeps} ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS})
-endif ()
+add_library(zeek_objs OBJECT ${zeek_SRCS})
+
+add_executable(zeek main.cc
+               $<TARGET_OBJECTS:zeek_objs>
+               ${zeek_HEADERS}
+               ${bro_SUBDIR_LIBS}
+               ${bro_PLUGIN_LIBS}
+)
+target_link_libraries(zeek ${zeekdeps} ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS})
 
 if ( NOT "${bro_LINKER_FLAGS}" STREQUAL "" )
     set_target_properties(zeek PROPERTIES LINK_FLAGS "${bro_LINKER_FLAGS}")
@@ -365,9 +399,11 @@ endif ()
 
 install(TARGETS zeek DESTINATION bin)
 
-# Install wrapper script for Bro-to-Zeek renaming.
-include(InstallSymlink)
-InstallSymlink("${CMAKE_INSTALL_PREFIX}/bin/zeek-wrapper" "${CMAKE_INSTALL_PREFIX}/bin/bro")
+if (NOT WIN32)
+    # Install wrapper script for Bro-to-Zeek renaming.
+    include(InstallSymlink)
+    InstallSymlink("${CMAKE_INSTALL_PREFIX}/bin/zeek-wrapper" "${CMAKE_INSTALL_PREFIX}/bin/bro")
+endif ()
 
 set(BRO_EXE zeek
     CACHE STRING "Zeek executable binary" FORCE)
@@ -375,10 +411,12 @@ set(BRO_EXE zeek
 set(BRO_EXE_PATH ${CMAKE_CURRENT_BINARY_DIR}/zeek
     CACHE STRING "Path to Zeek executable binary" FORCE)
 
-# Older plugins may still use `bro` in unit tests.
-execute_process(COMMAND "${CMAKE_COMMAND}" -E create_symlink
-                "${CMAKE_CURRENT_BINARY_DIR}/../zeek-wrapper.in"
-                "${CMAKE_CURRENT_BINARY_DIR}/bro")
+if ( NOT BINARY_PACKAGING_MODE )
+    # Older plugins may still use `bro` in unit tests.
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E create_symlink
+                    "${CMAKE_CURRENT_BINARY_DIR}/../zeek-wrapper.in"
+                    "${CMAKE_CURRENT_BINARY_DIR}/bro")
+endif ()
 
 # Target to create all the autogenerated files.
 add_custom_target(generate_outputs_stage1)
@@ -396,13 +434,13 @@ add_dependencies(generate_outputs generate_outputs_stage2a generate_outputs_stag
 
 # Build __load__.zeek files for standard *.bif.zeek.
 bro_bif_create_loader(bif_loader "${bro_BASE_BIF_SCRIPTS}")
-add_dependencies(bif_loader ${bro_SUBDIRS})
-add_dependencies(zeek bif_loader)
+add_dependencies(bif_loader ${bro_PLUGIN_DEPS} ${bro_SUBDIR_DEPS})
+add_dependencies(zeek_objs bif_loader)
 
 # Build __load__.zeek files for plugins/*.bif.zeek.
 bro_bif_create_loader(bif_loader_plugins "${bro_PLUGIN_BIF_SCRIPTS}")
-add_dependencies(bif_loader_plugins ${bro_SUBDIRS})
-add_dependencies(zeek bif_loader_plugins)
+add_dependencies(bif_loader_plugins ${bro_PLUGIN_DEPS} ${bro_SUBDIR_DEPS})
+add_dependencies(zeek_objs bif_loader_plugins)
 
 # Install *.bif.zeek.
 install(DIRECTORY ${CMAKE_BINARY_DIR}/scripts/base/bif DESTINATION ${ZEEK_SCRIPT_INSTALL_PATH}/base)
@@ -441,28 +479,37 @@ install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/
 )
 
 install(FILES
-        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/json.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/sqlite3.h
         DESTINATION include/zeek/3rdparty
 )
 
-install(FILES
-        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/tsl-ordered-map/ordered_map.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/tsl-ordered-map/ordered_hash.h
-        DESTINATION include/zeek/3rdparty/tsl-ordered-map
-)
+########################################################################
+## Clang-tidy target now that we have all of the sources
 
-find_program(CLANG_TIDY NAMES clang-tidy)
-if (CLANG_TIDY)
-    set(TIDY_SRCS "")
-    foreach(f ${MAIN_SRCS})
-        list(APPEND TIDY_SRCS "src/${f}")
-    endforeach(f)
-    # TODO: this currently doesn't include many of the subdirectories/plugins
-    # that build static libraries for inclusion into the final zeek binary
-    # (analyzers, broker, etc.) or generated code (BIFs, BinPAC, etc.).
-    add_custom_target(clang-tidy
-                      COMMAND ${CLANG_TIDY} -p ${CMAKE_BINARY_DIR} ${TIDY_SRCS}
-                      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-endif()
+add_clang_tidy_files(${MAIN_SRCS})
+
+# At this point we have included all of the cc files in src, all of the BinPAC
+# (*.pac.cc) files, and most of the generated code for BIFs (not including
+# *.bif.register.cc)
+create_clang_tidy_target()
+
+########################################################################
+## CTest setup.
+
+# Scan all .cc files for TEST_CASE macros and generate CTest targets.
+if (ENABLE_ZEEK_UNIT_TESTS)
+    set(test_cases "")
+    foreach (cc_file ${TIDY_SRCS})
+        file (STRINGS ${cc_file} test_case_lines REGEX "TEST_CASE")
+        foreach (line ${test_case_lines})
+            string(REGEX REPLACE "TEST_CASE\\(\"(.+)\"\\)" "\\1" test_case "${line}")
+            list(APPEND test_cases "${test_case}")
+        endforeach ()
+    endforeach ()
+    list(LENGTH test_cases num_test_cases)
+    MESSAGE(STATUS "-- Found ${num_test_cases} test cases for CTest")
+    foreach (test_case ${test_cases})
+        add_test(NAME "\"${test_case}\""
+                 COMMAND zeek --test "--test-case=${test_case}")
+    endforeach ()
+endif ()

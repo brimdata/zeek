@@ -102,58 +102,10 @@ function run_external_btests
     fi
     }
 
-function run_leak_tests
-    {
-    local zeek_testing_pid=""
-    local zeek_testing_pid_private=""
-    banner "Running memory leak tests: zeek"
-
-    pushd testing/btest
-    ${BTEST} -d -b -x btest-results.xml -j ${ZEEK_CI_BTEST_JOBS} -g leaks || result=1
-    prep_artifacts
-    popd
-
-    pushd testing/external/zeek-testing
-    ${BTEST} -d -b -x btest-results.xml -j ${ZEEK_CI_BTEST_JOBS} -g leaks >btest.out 2>&1 &
-    zeek_testing_pid=$!
-    popd
-
-    if [[ -d testing/external/zeek-testing-private ]]; then
-        pushd testing/external/zeek-testing-private
-        # Note that we don't use btest's "-d" flag or generate/upload any
-        # artifacts to prevent leaking information about the private pcaps.
-        ${BTEST} -b -j ${ZEEK_CI_BTEST_JOBS} -g leaks >btest.out 2>&1 &
-        zeek_testing_private_pid=$!
-        popd
-    fi
-
-    banner "Running memory leak tests: external/zeek-testing"
-    wait ${zeek_testing_pid} || result=1
-    pushd testing/external/zeek-testing
-    cat btest.out
-    prep_artifacts
-    popd
-
-    if [[ -n "${zeek_testing_private_pid}" ]]; then
-        banner "Running memory leak tests: external/zeek-testing-private"
-        wait ${zeek_testing_private_pid} || result=1
-        cat testing/external/zeek-testing-private/btest.out
-    else
-        banner "Skipping private tests (not available for PRs)"
-    fi
-
-    return 0
-    }
-
 banner "Start tests: ${ZEEK_CI_CPUS} cpus, ${ZEEK_CI_BTEST_JOBS} btest jobs"
 
-if [[ -n "${ZEEK_CI_LEAK_CHECK}" ]]; then
-    run_leak_tests
-else
-    # Zeek 3.0.x has no unit tests.
-    # run_unit_tests
-    run_btests
-    run_external_btests
-fi
+run_unit_tests
+run_btests
+run_external_btests
 
 exit ${result}

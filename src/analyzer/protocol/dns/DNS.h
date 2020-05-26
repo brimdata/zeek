@@ -1,7 +1,6 @@
 // See the file "COPYING" in the main distribution directory for copyright.
 
-#ifndef ANALYZER_PROTOCOL_DNS_DNS_H
-#define ANALYZER_PROTOCOL_DNS_DNS_H
+#pragma once
 
 #include "analyzer/protocol/tcp/TCP.h"
 #include "binpac_bro.h"
@@ -143,7 +142,7 @@ struct RRSIG_DATA {
 	unsigned short type_covered;	// 16 : ExtractShort(data, len)
 	unsigned short algorithm;		// 8
 	unsigned short labels;			// 8
-	uint32 orig_ttl;				// 32
+	uint32_t orig_ttl;				// 32
 	unsigned long sig_exp;			// 32
 	unsigned long sig_incep;		// 32
 	unsigned short key_tag;			//16
@@ -208,7 +207,7 @@ public:
 	StringVal* query_name;
 	RR_Type atype;
 	int aclass;	///< normally = 1, inet
-	uint32 ttl;
+	uint32_t ttl;
 
 	DNS_AnswerType answer_type;
 	int skip_event;		///< if true, don't generate corresponding events
@@ -223,89 +222,89 @@ class DNS_Interpreter {
 public:
 	explicit DNS_Interpreter(analyzer::Analyzer* analyzer);
 
-	int ParseMessage(const u_char* data, int len, int is_query);
+	void ParseMessage(const u_char* data, int len, int is_query);
 
 	void Timeout()	{ }
 
 protected:
-	int EndMessage(DNS_MsgInfo* msg);
+	void EndMessage(DNS_MsgInfo* msg);
 
-	int ParseQuestions(DNS_MsgInfo* msg,
+	bool ParseQuestions(DNS_MsgInfo* msg,
 				const u_char*& data, int& len,
 				const u_char* start);
-	int ParseAnswers(DNS_MsgInfo* msg, int n, DNS_AnswerType answer_type,
+	bool ParseAnswers(DNS_MsgInfo* msg, int n, DNS_AnswerType answer_type,
 				const u_char*& data, int& len,
 				const u_char* start);
 
-	int ParseQuestion(DNS_MsgInfo* msg,
+	bool ParseQuestion(DNS_MsgInfo* msg,
 			const u_char*& data, int& len, const u_char* start);
-	int ParseAnswer(DNS_MsgInfo* msg,
+	bool ParseAnswer(DNS_MsgInfo* msg,
 			const u_char*& data, int& len, const u_char* start);
 
 	u_char* ExtractName(const u_char*& data, int& len,
 				u_char* label, int label_len,
 				const u_char* msg_start);
-	int ExtractLabel(const u_char*& data, int& len,
+	bool ExtractLabel(const u_char*& data, int& len,
 			 u_char*& label, int& label_len,
 			 const u_char* msg_start);
 
-	uint16 ExtractShort(const u_char*& data, int& len);
-	uint32 ExtractLong(const u_char*& data, int& len);
+	uint16_t ExtractShort(const u_char*& data, int& len);
+	uint32_t ExtractLong(const u_char*& data, int& len);
 	void ExtractOctets(const u_char*& data, int& len, BroString** p);
 
 	BroString* ExtractStream(const u_char*& data, int& len, int sig_len);
 
-	int ParseRR_Name(DNS_MsgInfo* msg,
+	bool ParseRR_Name(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_SOA(DNS_MsgInfo* msg,
+	bool ParseRR_SOA(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_MX(DNS_MsgInfo* msg,
+	bool ParseRR_MX(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_NBS(DNS_MsgInfo* msg,
+	bool ParseRR_NBS(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_SRV(DNS_MsgInfo* msg,
+	bool ParseRR_SRV(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_EDNS(DNS_MsgInfo* msg,
+	bool ParseRR_EDNS(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_A(DNS_MsgInfo* msg,
+	bool ParseRR_A(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength);
-	int ParseRR_AAAA(DNS_MsgInfo* msg,
+	bool ParseRR_AAAA(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength);
-	int ParseRR_WKS(DNS_MsgInfo* msg,
+	bool ParseRR_WKS(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength);
-	int ParseRR_HINFO(DNS_MsgInfo* msg,
+	bool ParseRR_HINFO(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength);
-	int ParseRR_TXT(DNS_MsgInfo* msg,
+	bool ParseRR_TXT(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_SPF(DNS_MsgInfo* msg,
+	bool ParseRR_SPF(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_CAA(DNS_MsgInfo* msg,
+	bool ParseRR_CAA(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_TSIG(DNS_MsgInfo* msg,
+	bool ParseRR_TSIG(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_RRSIG(DNS_MsgInfo* msg,
+	bool ParseRR_RRSIG(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_DNSKEY(DNS_MsgInfo* msg,
+	bool ParseRR_DNSKEY(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_NSEC(DNS_MsgInfo* msg,
+	bool ParseRR_NSEC(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_NSEC3(DNS_MsgInfo* msg,
+	bool ParseRR_NSEC3(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
-	int ParseRR_DS(DNS_MsgInfo* msg,
+	bool ParseRR_DS(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
 	void SendReplyOrRejectEvent(DNS_MsgInfo* msg, EventHandlerPtr event,
@@ -325,7 +324,7 @@ typedef enum {
 
 // Support analyzer which chunks the TCP stream into "packets".
 // ### This should be merged with TCP_Contents_RPC.
-class Contents_DNS : public tcp::TCP_SupportAnalyzer {
+class Contents_DNS final : public tcp::TCP_SupportAnalyzer {
 public:
 	Contents_DNS(Connection* c, bool orig, DNS_Interpreter* interp);
 	~Contents_DNS() override;
@@ -347,18 +346,18 @@ protected:
 };
 
 // Works for both TCP and UDP.
-class DNS_Analyzer : public tcp::TCP_ApplicationAnalyzer {
+class DNS_Analyzer final : public tcp::TCP_ApplicationAnalyzer {
 public:
 	explicit DNS_Analyzer(Connection* conn);
 	~DNS_Analyzer() override;
 
 	void DeliverPacket(int len, const u_char* data, bool orig,
-					uint64 seq, const IP_Hdr* ip, int caplen) override;
+					uint64_t seq, const IP_Hdr* ip, int caplen) override;
 
 	void Init() override;
 	void Done() override;
 	void ConnectionClosed(tcp::TCP_Endpoint* endpoint,
-					tcp::TCP_Endpoint* peer, int gen_event) override;
+					tcp::TCP_Endpoint* peer, bool gen_event) override;
 	void ExpireTimer(double t);
 
 	static analyzer::Analyzer* Instantiate(Connection* conn)
@@ -368,12 +367,6 @@ protected:
 	DNS_Interpreter* interp;
 	Contents_DNS* contents_dns_orig;
 	Contents_DNS* contents_dns_resp;
-	int did_session_done;
 };
 
-// FIXME: Doesn't really fit into new analyzer structure. What to do?
-int IsReuse(double t, const u_char* pkt);
-
-} } // namespace analyzer::* 
-
-#endif
+} } // namespace analyzer::*

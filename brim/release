@@ -1,27 +1,44 @@
 #!/bin/sh -ex
 
-case $(uname -s) in
+install_libpcap() {
+    install_prefix=${1:?'install prefix required'}
+    mkdir libpcap
+    wget -qO - https://github.com/the-tcpdump-group/libpcap/archive/libpcap-1.9.1.tar.gz |
+        tar -xzf - -C libpcap --strip-components 1
+    cmake -D CMAKE_INSTALL_PREFIX="$install_prefix" -D ENABLE_REMOTE=OFF \
+        -G Ninja -S libpcap -B libpcap/build
+    $sudo ninja -C libpcap/build install
+    $sudo rm -r libpcap
+}
+
+case $(uname) in
     Darwin)
-        goos=darwin
-        logical_cpus=$(sysctl -n hw.logicalcpu)
-        brew install bison openssl
+        sudo=sudo
+        brew install bison ninja openssl
         ;;
     Linux)
-        goos=linux
-        logical_cpus=$(nproc)
-        sudo apt-get -y install bison flex libssl-dev
-
-        # Compile a recent libpcap, since the one we'd get via apt-get is old
-        # and hits https://github.com/brimsec/zeek/issues/17.
-        (
-            cd $(mktemp -d)
-            wget https://github.com/the-tcpdump-group/libpcap/archive/libpcap-1.9.1.tar.gz
-            tar xzvf libpcap-1.9.1.tar.gz
-            cd libpcap-libpcap-1.9.1
-            ./configure
-            make
-            sudo make install
-        )
+        sudo=sudo
+        sudo apt-get -y install bison flex libssl-dev ninja-build
+        # Compile a recent libpcap since the one we'd get via apt-get is
+        # old and hits https://github.com/brimsec/zeek/issues/17.
+        install_libpcap /
+        ;;
+    MSYS_NT*)
+        exe=.exe
+        export PATH=/mingw64/bin:$PATH
+        go build -o brim/zeekrunner.exe brim/zeekrunner.go
+        pacman -S --needed --noconfirm \
+            bison flex mingw-w64-x86_64-cmake mingw-w64-x86_64-gcc \
+            mingw-w64-x86_64-ninja mingw-w64-x86_64-openssl python zip
+        install_libpcap /mingw64
+        # Switch to real symlinks.
+        git config --replace-all core.symlinks true
+        MSYS=winsymlinks:nativestrict git reset --hard
+        # Replace the symlink at x509-signed_certificate_timestamp.pac
+        # with a copy of the target file because CMake chokes with "file
+        # INSTALL cannot read symlink" during installation.
+        rm src/file_analysis/analyzer/x509/x509-signed_certificate_timestamp.pac
+        git checkout -- src/file_analysis/analyzer/x509/x509-signed_certificate_timestamp.pac
         ;;
     *)
         echo "unknown OS" >&2
@@ -29,17 +46,19 @@ case $(uname -s) in
         ;;
 esac
 
-git submodule update --init --recursive
 ./configure \
-	--binary-package --disable-auxtools --disable-broker-tests \
-	--disable-python --disable-zeekctl --enable-static-binpac \
-	--enable-static-broker --osx-min-version=10.10
-sudo make -C build/scripts -j $logical_cpus install/strip
-sudo make -C build/src -j $logical_cpus install/strip
-mkdir -p zeek/bin && cp /usr/local/zeek/bin/zeek zeek/bin
-mkdir -p zeek/share/zeek
+    --binary-package --disable-auxtools --disable-broker-tests \
+    --disable-python --disable-zeekctl --enable-static-binpac \
+    --enable-static-broker --generator=Ninja --osx-min-version=10.14
+$sudo ninja -C build scripts/install/strip src/install/strip
+
+mkdir -p zeek/bin zeek/share/zeek
+cp brim/zeekrunner$exe zeek
+cp /usr/local/zeek/bin/zeek$exe zeek/bin
 for d in base policy site; do
     cp -R /usr/local/zeek/share/zeek/$d zeek/share/zeek
 done
-cp brim/zeekrunner zeek/zeekrunner
-zip -r zeek-$(git describe --dirty --tags).$goos-amd64.zip zeek
+
+# Can't use --diry with "git describe" on Windows because of the
+# x509-signed_certificate_timestamp.pac shenanigans.
+zip -r zeek-$(git describe --always --tags).$(go env GOOS)-$(go env GOARCH).zip zeek

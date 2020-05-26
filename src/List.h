@@ -1,5 +1,4 @@
-#ifndef list_h
-#define list_h
+#pragma once
 
 // BaseList.h --
 //	Interface for class BaseList, current implementation is as an
@@ -30,12 +29,14 @@
 // TODO: this can be removed in v3.1 when List::sort() is removed
 typedef int (*list_cmp_func)(const void* v1, const void* v2);
 
-template<typename T>
+enum class ListOrder : int { ORDERED, UNORDERED };
+
+template<typename T, ListOrder Order = ListOrder::ORDERED>
 class List {
 public:
 
-	const int DEFAULT_LIST_SIZE = 10;
-	const int LIST_GROWTH_FACTOR = 2;
+	constexpr static int DEFAULT_LIST_SIZE = 10;
+	constexpr static int LIST_GROWTH_FACTOR = 2;
 
 	~List()		{ free(entries); }
 	explicit List(int size = 0)
@@ -136,6 +137,9 @@ public:
 		num_entries = max_entries = 0;
 		}
 
+	bool empty() const noexcept { return num_entries == 0; }
+	size_t size() const noexcept { return num_entries; }
+
 	int length() const	{ return num_entries; }
 	int max() const		{ return max_entries; }
 	int resize(int new_size = 0)	// 0 => size to fit current number of entries
@@ -155,12 +159,6 @@ public:
 		return max_entries;
 		}
 
-	ZEEK_DEPRECATED("Remove in v3.1: Use std::sort instead")
-	void sort(list_cmp_func cmp_func)
-		{
-		qsort(entries, num_entries, sizeof(T), cmp_func);
-		}
-
 	int MemoryAllocation() const
 		{ return padded_sizeof(*this) + pad_size(max_entries * sizeof(T)); }
 
@@ -175,7 +173,7 @@ public:
 		++num_entries;
 		entries[0] = a;
 		}
-	
+
 	void push_back(const T& a)
 		{
 		if ( num_entries == max_entries )
@@ -183,18 +181,12 @@ public:
 
 		entries[num_entries++] = a;
 		}
-	
+
 	void pop_front()	{ remove_nth(0); }
 	void pop_back()	{ remove_nth(num_entries-1); }
 
 	T& front()	 { return entries[0]; }
 	T& back()	 { return entries[num_entries-1]; }
-
-	ZEEK_DEPRECATED("Remove in v3.1: Use push_front instead")
-	void insert(const T& a)	// add at head of list
-		{
-		push_front(a);
-		}
 
 	// The append method is maintained for historical/compatibility reasons.
 	// (It's commonly used in the event generation API)
@@ -205,13 +197,11 @@ public:
 
 	bool remove(const T& a)	// delete entry from list
 		{
-		for ( int i = 0; i < num_entries; ++i )
+		int pos = member_pos(a);
+		if ( pos != -1 )
 			{
-			if ( a == entries[i] )
-				{
-				remove_nth(i);
-				return true;
-				}
+			remove_nth(pos);
+			return true;
 			}
 
 		return false;
@@ -222,23 +212,25 @@ public:
 		assert(n >=0 && n < num_entries);
 
 		T old_ent = entries[n];
-		--num_entries;
 
-		for ( ; n < num_entries; ++n )
-			entries[n] = entries[n+1];
+		// For data where we don't care about ordering, we don't care about keeping
+		// the list in the same order when removing an element. Just swap the last
+		// element with the element being removed.
+		if constexpr ( Order == ListOrder::ORDERED )
+			{
+			--num_entries;
+
+			for ( ; n < num_entries; ++n )
+				entries[n] = entries[n+1];
+			}
+		else
+			{
+			entries[n] = entries[num_entries - 1];
+			--num_entries;
+			}
 
 		return old_ent;
 		}
-
-	ZEEK_DEPRECATED("Remove in v3.1: Use back()/pop_back() instead")
-	T get()		// return and remove ent at end of list
-		{
-		assert(num_entries > 0);
-		return entries[--num_entries];
-		}
-
-	ZEEK_DEPRECATED("Remove in v3.1: Use back() instead")
-	T& last()	{ return back(); }
 
 	// Return 0 if ent is not in the list, ent otherwise.
 	bool is_member(const T& a) const
@@ -260,16 +252,16 @@ public:
 	T replace(int ent_index, const T& new_ent)	// replace entry #i with a new value
 		{
 		if ( ent_index < 0 )
-			return 0;
+			return T{};
 
-		T old_ent = nullptr;
+		T old_ent{};
 
 		if ( ent_index > num_entries - 1 )
 			{ // replacement beyond the end of the list
 			resize(ent_index + 1);
 
 			for ( int i = num_entries; i < max_entries; ++i )
-				entries[i] = nullptr;
+				entries[i] = T{};
 			num_entries = max_entries;
 			}
 		else
@@ -338,8 +330,8 @@ protected:
 
 
 // Specialization of the List class to store pointers of a type.
-template<typename T>
-using PList = List<T*>;
+template<typename T, ListOrder Order = ListOrder::ORDERED>
+using PList = List<T*, Order>;
 
 // Popular type of list: list of strings.
 typedef PList<char> name_list;
@@ -348,5 +340,3 @@ typedef PList<char> name_list;
 #define loop_over_list(list, iterator)  \
 	int iterator;	\
 	for ( iterator = 0; iterator < (list).length(); ++iterator )
-
-#endif /* list_h */
