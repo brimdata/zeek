@@ -74,7 +74,7 @@ for ZSCRIPT in "${ADDED_ZSCRIPTS[@]}"; do
     NAME=$(echo "$ZSCRIPT" | sed 's/^.*\///' | sed 's/#.*$//')
     COMMIT=$(echo "$ZSCRIPT" | cut -f2 -d#)
     $sudo zkg -vvv --config brim/zkg-config install "$REPO" --force --version "$COMMIT"
-    $sudo bash -c "echo \"@load ./$NAME # $ZSCRIPT\" >> zeek/share/zeek/site/site/local.zeek"
+    $sudo bash -c "echo \"@load ./$NAME # $ZSCRIPT\" >> zeek/share/zeek/site/local.zeek"
 done
 
 ls -alR /usr/local/zeek/share/zeek
