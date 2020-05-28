@@ -1900,11 +1900,7 @@ double parse_rotate_base_time(const char* rotate_base_time)
 		{
 		struct tm t;
 		if ( ! strptime(rotate_base_time, "%H:%M", &t) )
-			{
 			reporter->Warning("calc_next_rotate(): can't parse rotation base time");
-			base = 86400;
-			}
-		
 		else
 			base = t.tm_min * 60 + t.tm_hour * 60 * 60;
 		}

@@ -10,6 +10,7 @@ bro_add_subdir_library(windows
     regex.c
     stdio.c
     stdlib.c
+    strptime.c
     sys.resource.c
     time.c
     unistd.c

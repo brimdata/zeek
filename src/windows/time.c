@@ -21,11 +21,6 @@ struct tm *localtime_r(const time_t *timer, struct tm *result)
 	return result;
 	}
 
-char* strptime(const char* s, const char* f, struct tm* tm)
-	{
-	return NULL;
-	}
-
 time_t timegm(struct tm *tm)
 	{
 	return _mkgmtime(tm);
