@@ -25,20 +25,21 @@ case $(uname) in
         ;;
     MSYS_NT*)
         exe=.exe
+        export MSYS=winsymlinks:nativestrict
         export PATH=/mingw64/bin:$PATH
         go build -o brim/zeekrunner.exe brim/zeekrunner.go
         pacman -S --needed --noconfirm \
             bison flex mingw-w64-x86_64-cmake mingw-w64-x86_64-gcc \
-            mingw-w64-x86_64-ninja mingw-w64-x86_64-openssl python zip
+            mingw-w64-x86_64-ninja mingw-w64-x86_64-openssl python-pip zip
         install_libpcap /mingw64
         # Switch to real symlinks.
         git config --replace-all core.symlinks true
-        MSYS=winsymlinks:nativestrict git reset --hard
+        git reset --hard
         # Replace the symlink at x509-signed_certificate_timestamp.pac
         # with a copy of the target file because CMake chokes with "file
         # INSTALL cannot read symlink" during installation.
         rm src/file_analysis/analyzer/x509/x509-signed_certificate_timestamp.pac
-        git checkout -- src/file_analysis/analyzer/x509/x509-signed_certificate_timestamp.pac
+        MSYS= git checkout -- src/file_analysis/analyzer/x509/x509-signed_certificate_timestamp.pac
         ;;
     *)
         echo "unknown OS" >&2
@@ -51,6 +52,18 @@ esac
     --disable-python --disable-zeekctl --enable-static-binpac \
     --enable-static-broker --generator=Ninja --osx-min-version=10.14
 $sudo ninja -C build scripts/install/strip src/install/strip
+
+$sudo pip install zkg
+PATH=$PWD/build:$PATH zkg autoconfig
+echo '@load packages' | $sudo tee -a /usr/local/zeek/share/zeek/site/local.zeek
+if [ "$OS" = Windows_NT ]; then
+    # Do this again to initialize /usr/local/zeek/share/zeek/site/packages.
+    PATH=$PWD/build:$PATH zkg autoconfig
+    mkdir -p /usr/local/zeek/share/zeek/site/packages/hassh
+    mkdir -p /usr/local/zeek/share/zeek/site/packages/ja3
+fi
+$sudo zkg install --force hassh --version cfa2315257eaa972e86f7fcd694712e0d32762ff
+$sudo zkg install --force ja3 --version 133f2a128b873f9c40e4e65c2b9dc372a801cf24
 
 mkdir -p zeek/bin zeek/share/zeek
 cp brim/zeekrunner$exe zeek
