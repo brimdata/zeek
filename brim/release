@@ -32,7 +32,7 @@ case $(uname) in
         pacman -S --needed --noconfirm \
             bison flex mingw-w64-x86_64-cmake mingw-w64-x86_64-gcc \
             mingw-w64-x86_64-ninja mingw-w64-x86_64-openssl python-pip zip \
-            mingw-w64-libmaxminddb
+            mingw-w64-x86_64-libmaxminddb
         install_libpcap /mingw64
         # Switch to real symlinks.
         git config --replace-all core.symlinks true
