@@ -14,11 +14,12 @@ install_libpcap() {
 case $(uname) in
     Darwin)
         sudo=sudo
-        brew install bison ninja openssl
+        brew install bison ninja openssl libmaxminddb
         ;;
     Linux)
         sudo=sudo
-        sudo apt-get -y install bison flex libssl-dev ninja-build
+        sudo apt-get -y install bison flex libssl-dev ninja-build \
+            libmaxminddb-dev
         # Compile a recent libpcap since the one we'd get via apt-get is
         # old and hits https://github.com/brimsec/zeek/issues/17.
         install_libpcap /
@@ -30,7 +31,8 @@ case $(uname) in
         go build -o brim/zeekrunner.exe brim/zeekrunner.go
         pacman -S --needed --noconfirm \
             bison flex mingw-w64-x86_64-cmake mingw-w64-x86_64-gcc \
-            mingw-w64-x86_64-ninja mingw-w64-x86_64-openssl python-pip zip
+            mingw-w64-x86_64-ninja mingw-w64-x86_64-openssl python-pip zip \
+            mingw-w64-x86_64-libmaxminddb
         install_libpcap /mingw64
         # Switch to real symlinks.
         git config --replace-all core.symlinks true
@@ -61,9 +63,11 @@ if [ "$OS" = Windows_NT ]; then
     PATH=$PWD/build:$PATH zkg autoconfig
     mkdir -p /usr/local/zeek/share/zeek/site/packages/hassh
     mkdir -p /usr/local/zeek/share/zeek/site/packages/ja3
+    mkdir -p /usr/local/zeek/share/zeek/site/packages/geoip-conn
 fi
 $sudo zkg install --force hassh --version cfa2315257eaa972e86f7fcd694712e0d32762ff
 $sudo zkg install --force ja3 --version 133f2a128b873f9c40e4e65c2b9dc372a801cf24
+$sudo zkg install --force https://github.com/brimsec/geoip-conn --version 3d6ecdfd7d7b942ac374963d12f4945d514ed3bd
 
 mkdir -p zeek/bin zeek/share/zeek
 cp brim/zeekrunner$exe zeek
