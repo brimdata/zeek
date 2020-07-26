@@ -1,4 +1,4 @@
-#!/bin/sh -ex
+#!/bin/sh -x
 
 install_libpcap() {
     install_prefix=${1:?'install prefix required'}
@@ -9,6 +9,15 @@ install_libpcap() {
         -G Ninja -S libpcap -B libpcap/build
     $sudo ninja -C libpcap/build install
     $sudo rm -r libpcap
+}
+
+install_community_id() {
+    zeek_dist="$(PWD)"
+    git clone https://github.com/brimsec/zeek-community-id.git
+    pushd zeek-community-id
+    ./configure --zeek-dist="${zeek_dist}"
+    $sudo make -C build install
+    popd
 }
 
 case $(uname) in
@@ -68,6 +77,7 @@ fi
 $sudo zkg install --force hassh --version cfa2315257eaa972e86f7fcd694712e0d32762ff
 $sudo zkg install --force ja3 --version 133f2a128b873f9c40e4e65c2b9dc372a801cf24
 $sudo zkg install --force geoip-conn --version 66f3905f8a410e6aa6a6e95dd9b07c3e4f4fc2ca
+install_community_id
 
 mkdir -p zeek/bin zeek/share/zeek
 cp brim/zeekrunner$exe zeek

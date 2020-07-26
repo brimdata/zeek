@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - community-id-compiled
     tags:
       - v*brim*
 
