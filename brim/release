@@ -67,7 +67,7 @@ if [ "$OS" = Windows_NT ]; then
 fi
 $sudo zkg install --force hassh --version cfa2315257eaa972e86f7fcd694712e0d32762ff
 $sudo zkg install --force ja3 --version 133f2a128b873f9c40e4e65c2b9dc372a801cf24
-$sudo zkg install --force geoip-conn --version 38f46b0d3b474eca1eeebdb81482ffd2f7a3b483
+$sudo zkg install --force geoip-conn --version fb89fe068009ee5f9284dcfbc6179edf595fa933
 
 mkdir -p zeek/bin zeek/share/zeek
 cp brim/zeekrunner$exe zeek
