@@ -867,16 +867,26 @@ bool ensure_intermediate_dirs(const char* dirname)
 	if ( ! dirname || strlen(dirname) == 0 )
 		return false;
 
-	bool absolute = dirname[0] == '/';
 	string path = normalize_path(dirname);
 
-	const auto path_components = tokenize_string(path, '/');
+	auto path_components = tokenize_string(path, '/');
 
 	string current_dir;
 
+	if ( dirname[0] == '/' )
+		current_dir = "/";
+#ifdef __MINGW32__
+	else if ( path_components[0].size() == 2 && isalpha(path_components[0][0]) && path_components[0][1] == ':' )
+		{
+		current_dir = path_components[0];
+		current_dir += "/";
+		path_components.erase(path_components.begin());
+		}
+#endif
+
 	for ( size_t i = 0; i < path_components.size(); ++i )
 		{
-		if ( i > 0 || absolute )
+		if ( i > 0 )
 			current_dir += "/";
 
 		current_dir += path_components[i];
@@ -910,6 +920,18 @@ bool ensure_dir(const char *dirname)
 
 	reporter->Warning("%s exists but is not a directory", dirname);
 	return false;
+	}
+
+static bool is_absolute_path(std::string_view path)
+	{
+	if ( path.size() == 0 )
+		return false;
+#ifdef __MINGW32__
+	if ( path[0] == '\\' ||
+	    (isalpha(path[0]) && path[1] == ':' && (path[2] == '/' || path[2] == '\\')) )
+		return true;
+#endif
+	return path[0] == '/';
 	}
 
 bool is_dir(const std::string& path)
@@ -1276,7 +1298,7 @@ extern void add_to_bro_path(const string& dir)
 	// Make sure path is initialized.
 	bro_path();
 
-	bro_path_value += string(":") + dir;
+	bro_path_value += string(1, path_list_separator) + dir;
 	}
 
 const char* bro_plugin_path()
@@ -1306,7 +1328,7 @@ string bro_prefixes()
 	for ( const auto& prefix : zeek_script_prefixes )
 		{
 		if ( ! rval.empty() )
-			rval.append(":");
+			rval.push_back(path_list_separator);
 		rval.append(prefix);
 		}
 
@@ -1621,6 +1643,16 @@ TEST_CASE("util normalize_path")
 
 string normalize_path(std::string_view path)
 	{
+#ifdef __MINGW32__
+	string tmp;
+	if ( path.find('\\') != std::string::npos )
+		{
+		tmp = path;
+		std::replace(tmp.begin(), tmp.end(), '\\', '/');
+		path = tmp;
+		}
+#endif
+
 	if ( path.find("/.") == std::string_view::npos &&
 	     path.find("//") == std::string_view::npos )
 		{
@@ -1691,7 +1723,7 @@ string without_bropath_component(std::string_view path)
 	{
 	string rval = normalize_path(path);
 
-	const auto paths = tokenize_string(bro_path(), ':');
+	const auto paths = tokenize_string(bro_path(), path_list_separator);
 
 	for ( size_t i = 0; i < paths.size(); ++i )
 		{
@@ -1721,12 +1753,7 @@ static string find_file_in_path(const string& filename, const string& path,
 		return string();
 
 	// If file name is an absolute path, searching within *path* is pointless.
-#ifdef __MINGW32__
-	if ( filename[0] == '/' ||
-	    (filename.size() >2 && isalpha(filename[0]) && filename[1] == ':' && filename[2] == '/') )
-#else
-	if ( filename[0] == '/' )
-#endif
+	if ( is_absolute_path(filename) )
 		{
 		if ( can_read(filename) )
 			return filename;
@@ -1758,14 +1785,14 @@ std::string get_exe_path(const std::string& invocation)
 #ifdef __MINGW32__
 	char buf[MAX_PATH];
 	auto n = GetModuleFileNameA(nullptr, buf, sizeof(buf));
-	if ( n > 0 || n < sizeof(buf) )
+	if ( n > 0 && n < sizeof(buf) )
 		return std::string(buf);
 #endif
 
 	if ( invocation.empty() )
 		return "";
 
-	if ( invocation[0] == '/' || invocation[0] == '~' )
+	if ( is_absolute_path(invocation) || invocation[0] == '~' )
 		// Absolute path
 		return invocation;
 
@@ -1792,17 +1819,11 @@ std::string get_exe_path(const std::string& invocation)
 	return find_file(invocation, path);
 	}
 
-#ifdef __MINGW32__
-static const char *path_list_separator = ";";
-#else
-static const char *path_list_separator = ":";
-#endif
-
 string find_file(const string& filename, const string& path_set,
                  const string& opt_ext)
 	{
 	vector<string> paths;
-	tokenize_string(path_set, path_list_separator, &paths);
+	tokenize_string(path_set, string(1, path_list_separator), &paths);
 
 	vector<string> ext;
 	if ( ! opt_ext.empty() )
@@ -1822,7 +1843,7 @@ string find_file(const string& filename, const string& path_set,
 string find_script_file(const string& filename, const string& path_set)
 	{
 	vector<string> paths;
-	tokenize_string(path_set, path_list_separator, &paths);
+	tokenize_string(path_set, string(1, path_list_separator), &paths);
 
 	vector<string> ext(script_extensions.begin(), script_extensions.end());
 

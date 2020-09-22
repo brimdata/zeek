@@ -5,13 +5,13 @@ build_type=@CMAKE_BUILD_TYPE_LOWER@
 prefix=@CMAKE_INSTALL_PREFIX@
 script_dir=@ZEEK_SCRIPT_INSTALL_PATH@
 site_dir=@ZEEK_SCRIPT_INSTALL_PATH@/site
-plugin_dir=@BRO_PLUGIN_INSTALL_PATH@
+plugin_dir=@bro_plugin_install_path@
 config_dir=@ZEEK_ETC_INSTALL_DIR@
 python_dir=@PY_MOD_INSTALL_DIR@
 cmake_dir=@CMAKE_INSTALL_PREFIX@/share/zeek/cmake
 # Remove in v4.1: don't need @prefix@/include/zeek, just @prefix@/include
-include_dir=@CMAKE_INSTALL_PREFIX@/include:@CMAKE_INSTALL_PREFIX@/include/zeek
-zeekpath=@DEFAULT_ZEEKPATH@
+include_dir=@cmake_install_prefix@/include:@cmake_install_prefix@/include/zeek
+zeekpath=@default_zeekpath@
 zeek_dist=@ZEEK_DIST@
 binpac_root=@ZEEK_CONFIG_BINPAC_ROOT_DIR@
 caf_root=@ZEEK_CONFIG_CAF_ROOT_DIR@

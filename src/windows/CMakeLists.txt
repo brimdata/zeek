@@ -1,11 +1,8 @@
 include(ZeekSubdir)
 
 bro_add_subdir_library(windows
-    dlfcn.c
     fcntl.c
-    fnmatch.c
     fts.c
-    glob.c
     netdb.c
     regex.c
     stdio.c
@@ -14,4 +11,8 @@ bro_add_subdir_library(windows
     sys.resource.c
     time.c
     unistd.c
+)
+
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/usr.include/
+    DESTINATION include/zeek
 )

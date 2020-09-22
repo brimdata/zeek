@@ -31,24 +31,37 @@ case $(uname) in
         ;;
     *_NT-*)
         exe=.exe
+        export CMAKE_GENERATOR='MSYS Makefiles'  # For Zeek plugins.
         export MSYS=winsymlinks:nativestrict
         export PATH=/mingw64/bin:$PATH
         go build -o brim/zeekrunner.exe brim/zeekrunner.go
         pacman -S --needed --noconfirm \
-            bison flex mingw-w64-x86_64-ccache \
+            bison flex make mingw-w64-x86_64-ccache \
             mingw-w64-x86_64-cmake mingw-w64-x86_64-gcc \
             mingw-w64-x86_64-libmaxminddb mingw-w64-x86_64-ninja \
             mingw-w64-x86_64-openssl python-pip zip
         install_libpcap /mingw64
-        # Replace the symlink at x509-signed_certificate_timestamp.pac
-        # with a copy of the target file because CMake chokes with "file
-        # INSTALL cannot read symlink" during installation.
-        f=src/file_analysis/analyzer/x509/x509-signed_certificate_timestamp.pac
-        cp $f $f.tmp
-        rm $f
-        mv $f.tmp $f
+        # Replace some symlinks with a copy of the target file because
+        # CMake chokes on them with "file INSTALL cannot read symlink"
+        # during installation.
+        for f in cmake/BroPlugin.cmake src/file_analysis/analyzer/x509/x509-signed_certificate_timestamp.pac; do
+            cp $f $f.tmp
+            rm $f
+            mv $f.tmp $f
+        done
         # Need this until Broker updates to CAF 0.18.0.
         sed -i 's/NOT WIN32/1/' auxil/broker/caf/libcaf_openssl/CMakeLists.txt
+        # Put an ln that can create a symbolic link to "." in the search
+        # path ahead of /usr/bin/ln (which cannot do that) for use by
+        # zeek-plugin-install-package.sh.
+    cat > /mingw64/bin/ln <<'EOF'
+#!/bin/sh
+if [ "$1" = -s ]; then
+    shift
+    exec cmake -E create_symlink "$@"
+fi
+exec /usr/bin/ln "$@"
+EOF
         ;;
     *)
         echo "unknown OS: $(uname)" >&2
@@ -66,40 +79,81 @@ esac
     --enable-static-broker --generator=Ninja --osx-min-version=10.14
 
 ccache -z
-ninja -C build zeek
+ninja -C build
 ccache -s
 
-$sudo ninja -C build scripts/install/strip src/install/strip
+$sudo ninja -C build install/strip
 
 #
-# Install Zeek packages.
+# Install Zeek packages.  We don't use zkg because it doesn't work well
+# on Windows due to symlink issues and because it copies entire plugin
+# build directories to /usr/local/zeek/lib/zeek/plugins/packages/.
 #
 
-$sudo pip install zkg
-PATH=$PWD/build:$PATH zkg autoconfig
-echo '@load packages' | $sudo tee -a /usr/local/zeek/share/zeek/site/local.zeek
-if [ "$OS" = Windows_NT ]; then
-    # Do this again to initialize /usr/local/zeek/share/zeek/site/packages.
-    PATH=$PWD/build:$PATH zkg autoconfig
-    mkdir -p /usr/local/zeek/share/zeek/site/packages/hassh
-    mkdir -p /usr/local/zeek/share/zeek/site/packages/ja3
-    mkdir -p /usr/local/zeek/share/zeek/site/packages/geoip-conn
-fi
-$sudo zkg install --force hassh --version cfa2315257eaa972e86f7fcd694712e0d32762ff
-$sudo zkg install --force ja3 --version 133f2a128b873f9c40e4e65c2b9dc372a801cf24
-$sudo zkg install --force geoip-conn --version 73c8ab445112585195de9a3b2cd1140b68c367b4
+zkg_meta() {
+    section=${1:?'section required'}
+    option=${2:?'option required'}
+    python3 <<EOF
+import configparser
+c = configparser.ConfigParser()
+c.read('zkg.meta')
+print(c.get('$section', '$option', fallback=''))
+EOF
+}
+
+install_zeek_package() {
+    github_repo=${1:?'github_repo required'}
+    git_ref=${2:?'git_ref required'}
+    package=${github_repo#*/}
+    mkdir $package
+    (
+        export PATH=/usr/local/zeek/bin:$PATH
+        cd $package
+        wget -qO - https://github.com/$github_repo/tarball/$git_ref |
+            tar -xzf - --strip-components 1
+
+        script_dir=$(zkg_meta package script_dir)
+        $sudo cp -r "$script_dir" /usr/local/zeek/share/zeek/site/$package/
+
+        build_command=$(zkg_meta package build_command)
+        if [ "$build_command" ]; then
+            sh -c "$build_command"
+            $sudo tar -xf build/*.tgz -C /usr/local/zeek/lib/zeek/plugins
+        fi
+
+        test_command=$(zkg_meta package test_command)
+        if [ "$test_command" ]; then
+            # Btest fails without explanation on the GitHub Actions
+            # Windows runners, so skip tests there.
+            if [ "$GITHUB_ACTIONS" != true -o "$OS" != Windows_NT || ]; then
+               sh -c "$test_command"
+            fi
+        fi
+
+        echo "@load $package" | $sudo tee -a /usr/local/zeek/share/zeek/site/local.zeek
+    )
+    rm -r $package
+}
+
+$sudo pip install btest
+
+install_zeek_package brimsec/geoip-conn 73c8ab445112585195de9a3b2cd1140b68c367b4
+install_zeek_package corelight/zeek-community-id 181a104b99d9019771ece7e489e46f2268b746d8
+install_zeek_package salesforce/hassh cfa2315257eaa972e86f7fcd694712e0d32762ff
+install_zeek_package salesforce/ja3 133f2a128b873f9c40e4e65c2b9dc372a801cf24
 
 #
 # Create zip file.
 #
 
-mkdir -p zeek/bin zeek/share/zeek
+mkdir -p zeek/bin zeek/lib/zeek zeek/share/zeek
 cp brim/zeekrunner$exe zeek/
 cp /usr/local/zeek/bin/zeek$exe zeek/bin/
+cp -R /usr/local/zeek/lib/zeek/plugins zeek/lib/zeek/
 for d in base policy site; do
     cp -R /usr/local/zeek/share/zeek/$d zeek/share/zeek/
 done
 
-# Can't use --diry with "git describe" on Windows because of the
-# x509-signed_certificate_timestamp.pac shenanigans.
+# Can't use --diry with "git describe" on Windows because of the symlink
+# shenanigans.
 zip -r zeek-$(git describe --always --tags).$(go env GOOS)-$(go env GOARCH).zip zeek

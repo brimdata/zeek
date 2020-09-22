@@ -111,6 +111,12 @@ typedef int32_t ptr_compat_int;
 # error "Unsupported pointer size."
 #endif
 
+#ifdef __MINGW32__
+const char path_list_separator = ';';
+#else
+const char path_list_separator = ':';
+#endif
+
 extern "C"
 	{
 	#include "modp_numtoa.h"
