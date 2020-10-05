@@ -2,39 +2,41 @@
 
 #include "Tag.h"
 #include "Val.h"
-#include "IntrusivePtr.h"
 
-Tag::Tag(EnumType* etype, type_t arg_type, subtype_t arg_subtype)
+Tag::Tag(const zeek::EnumTypePtr& etype, type_t arg_type, subtype_t arg_subtype)
 	{
 	assert(arg_type > 0);
 
 	type = arg_type;
 	subtype = arg_subtype;
 	int64_t i = (int64_t)(type) | ((int64_t)subtype << 31);
-	Ref(etype);
-	val = etype->GetVal(i).release();
+	val = etype->GetEnumVal(i);
 	}
 
-Tag::Tag(EnumVal* arg_val)
+Tag::Tag(zeek::EnumType* etype, type_t arg_type, subtype_t arg_subtype)
+	: Tag({zeek::NewRef{}, etype}, arg_type, arg_subtype)
+	{ }
+
+Tag::Tag(zeek::EnumValPtr arg_val)
 	{
 	assert(arg_val);
 
-	val = arg_val;
-	Ref(val);
+	val = std::move(arg_val);
 
 	int64_t i = val->InternalInt();
 	type = i & 0xffffffff;
 	subtype = (i >> 31) & 0xffffffff;
 	}
 
+Tag::Tag(zeek::EnumVal* arg_val)
+	: Tag({zeek::NewRef{}, arg_val})
+	{ }
+
 Tag::Tag(const Tag& other)
 	{
 	type = other.type;
 	subtype = other.subtype;
 	val = other.val;
-
-	if ( val )
-		Ref(val);
 	}
 
 Tag::Tag()
@@ -44,11 +46,7 @@ Tag::Tag()
 	val = nullptr;
 	}
 
-Tag::~Tag()
-	{
-	Unref(val);
-	val = nullptr;
-	}
+Tag::~Tag() = default;
 
 Tag& Tag::operator=(const Tag& other)
 	{
@@ -56,11 +54,7 @@ Tag& Tag::operator=(const Tag& other)
 		{
 		type = other.type;
 		subtype = other.subtype;
-		Unref(val);
 		val = other.val;
-
-		if ( val )
-			Ref(val);
 		}
 
 	return *this;
@@ -72,24 +66,26 @@ Tag& Tag::operator=(const Tag&& other) noexcept
 		{
 		type = other.type;
 		subtype = other.subtype;
-		Unref(val);
-		val = other.val;
-		other.val = nullptr;
+		val = std::move(other.val);
 		}
 
 	return *this;
 	}
 
-EnumVal* Tag::AsEnumVal(EnumType* etype) const
+const zeek::EnumValPtr& Tag::AsVal(const zeek::EnumTypePtr& etype) const
 	{
 	if ( ! val )
 		{
 		assert(type == 0 && subtype == 0);
-		Ref(etype);
-		val = etype->GetVal(0).release();
+		val = etype->GetEnumVal(0);
 		}
 
 	return val;
+	}
+
+zeek::EnumVal* Tag::AsEnumVal(zeek::EnumType* etype) const
+	{
+	return AsVal({zeek::NewRef{}, etype}).get();
 	}
 
 std::string Tag::AsString() const

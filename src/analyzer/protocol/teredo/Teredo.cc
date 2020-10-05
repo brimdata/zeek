@@ -5,7 +5,7 @@
 #include "IP.h"
 #include "Reporter.h"
 #include "Sessions.h"
-#include "BroString.h"
+#include "ZeekString.h"
 
 #include "events.bif.h"
 
@@ -96,48 +96,41 @@ bool TeredoEncapsulation::DoParse(const u_char* data, int& len,
 	return false;
 	}
 
-IntrusivePtr<RecordVal> TeredoEncapsulation::BuildVal(const IP_Hdr* inner) const
+zeek::RecordValPtr TeredoEncapsulation::BuildVal(const IP_Hdr* inner) const
 	{
-	static RecordType* teredo_hdr_type = nullptr;
-	static RecordType* teredo_auth_type = nullptr;
-	static RecordType* teredo_origin_type = nullptr;
+	static auto teredo_hdr_type = zeek::id::find_type<zeek::RecordType>("teredo_hdr");
+	static auto teredo_auth_type = zeek::id::find_type<zeek::RecordType>("teredo_auth");
+	static auto teredo_origin_type = zeek::id::find_type<zeek::RecordType>("teredo_origin");
 
-	if ( ! teredo_hdr_type )
-		{
-		teredo_hdr_type = internal_type("teredo_hdr")->AsRecordType();
-		teredo_auth_type = internal_type("teredo_auth")->AsRecordType();
-		teredo_origin_type = internal_type("teredo_origin")->AsRecordType();
-		}
-
-	auto teredo_hdr = make_intrusive<RecordVal>(teredo_hdr_type);
+	auto teredo_hdr = zeek::make_intrusive<zeek::RecordVal>(teredo_hdr_type);
 
 	if ( auth )
 		{
-		RecordVal* teredo_auth = new RecordVal(teredo_auth_type);
+		auto teredo_auth = zeek::make_intrusive<zeek::RecordVal>(teredo_auth_type);
 		uint8_t id_len = *((uint8_t*)(auth + 2));
 		uint8_t au_len = *((uint8_t*)(auth + 3));
 		uint64_t nonce = ntohll(*((uint64_t*)(auth + 4 + id_len + au_len)));
 		uint8_t conf = *((uint8_t*)(auth + 4 + id_len + au_len + 8));
-		teredo_auth->Assign(0, make_intrusive<StringVal>(
-		    new BroString(auth + 4, id_len, true)));
-		teredo_auth->Assign(1, make_intrusive<StringVal>(
-		    new BroString(auth + 4 + id_len, au_len, true)));
-		teredo_auth->Assign(2, val_mgr->Count(nonce));
-		teredo_auth->Assign(3, val_mgr->Count(conf));
-		teredo_hdr->Assign(0, teredo_auth);
+		teredo_auth->Assign(0, zeek::make_intrusive<zeek::StringVal>(
+		    new zeek::String(auth + 4, id_len, true)));
+		teredo_auth->Assign(1, zeek::make_intrusive<zeek::StringVal>(
+		    new zeek::String(auth + 4 + id_len, au_len, true)));
+		teredo_auth->Assign(2, zeek::val_mgr->Count(nonce));
+		teredo_auth->Assign(3, zeek::val_mgr->Count(conf));
+		teredo_hdr->Assign(0, std::move(teredo_auth));
 		}
 
 	if ( origin_indication )
 		{
-		RecordVal* teredo_origin = new RecordVal(teredo_origin_type);
+		auto teredo_origin = zeek::make_intrusive<zeek::RecordVal>(teredo_origin_type);
 		uint16_t port = ntohs(*((uint16_t*)(origin_indication + 2))) ^ 0xFFFF;
 		uint32_t addr = ntohl(*((uint32_t*)(origin_indication + 4))) ^ 0xFFFFFFFF;
-		teredo_origin->Assign(0, val_mgr->Port(port, TRANSPORT_UDP));
-		teredo_origin->Assign(1, make_intrusive<AddrVal>(htonl(addr)));
-		teredo_hdr->Assign(1, teredo_origin);
+		teredo_origin->Assign(0, zeek::val_mgr->Port(port, TRANSPORT_UDP));
+		teredo_origin->Assign(1, zeek::make_intrusive<zeek::AddrVal>(htonl(addr)));
+		teredo_hdr->Assign(1, std::move(teredo_origin));
 		}
 
-	teredo_hdr->Assign(2, inner->BuildPktHdrVal());
+	teredo_hdr->Assign(2, inner->ToPktHdrVal());
 	return teredo_hdr;
 	}
 
@@ -161,7 +154,7 @@ void Teredo_Analyzer::DeliverPacket(int len, const u_char* data, bool orig,
 
 	const EncapsulationStack* e = Conn()->GetEncapsulation();
 
-	if ( e && e->Depth() >= BifConst::Tunnel::max_depth )
+	if ( e && e->Depth() >= zeek::BifConst::Tunnel::max_depth )
 		{
 		Weird("tunnel_depth", true);
 		return;
@@ -201,7 +194,7 @@ void Teredo_Analyzer::DeliverPacket(int len, const u_char* data, bool orig,
 		return;
 		}
 
-	IntrusivePtr<Val> teredo_hdr;
+	zeek::ValPtr teredo_hdr;
 
 	if ( teredo_packet )
 		{

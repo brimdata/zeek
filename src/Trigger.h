@@ -1,35 +1,39 @@
 #pragma once
 
-#include "Obj.h"
-#include "Notifier.h"
-#include "iosource/IOSource.h"
-
 #include <list>
 #include <vector>
 #include <map>
 
-class CallExpr;
-class Expr;
-class Stmt;
-class Frame;
-class Val;
-class ID;
+#include "Obj.h"
+#include "Notifier.h"
+#include "iosource/IOSource.h"
+#include "util.h"
+#include "IntrusivePtr.h"
+
 class ODesc;
 
-namespace trigger {
+ZEEK_FORWARD_DECLARE_NAMESPACED(Val, zeek);
+ZEEK_FORWARD_DECLARE_NAMESPACED(Frame, zeek::detail);
+ZEEK_FORWARD_DECLARE_NAMESPACED(Stmt, zeek::detail);
+ZEEK_FORWARD_DECLARE_NAMESPACED(Expr, zeek::detail);
+ZEEK_FORWARD_DECLARE_NAMESPACED(CallExpr, zeek::detail);
+ZEEK_FORWARD_DECLARE_NAMESPACED(ID, zeek::detail);
+
+namespace zeek::detail::trigger {
+
 // Triggers are the heart of "when" statements: expressions that when
 // they become true execute a body of statements.
 
 class TriggerTimer;
 class TriggerTraversalCallback;
 
-class Trigger final : public BroObj, public notifier::Receiver {
+class Trigger final : public Obj, public notifier::Receiver {
 public:
 	// Don't access Trigger objects; they take care of themselves after
 	// instantiation.  Note that if the condition is already true, the
 	// statements are executed immediately and the object is deleted
 	// right away.
-	Trigger(Expr* cond, Stmt* body, Stmt* timeout_stmts, Expr* timeout,
+	Trigger(zeek::detail::Expr* cond, zeek::detail::Stmt* body, zeek::detail::Stmt* timeout_stmts, zeek::detail::Expr* timeout,
 		Frame* f, bool is_return, const Location* loc);
 	~Trigger() override;
 
@@ -60,8 +64,8 @@ public:
 	// Cache for return values of delayed function calls.  Returns whether
 	// the trigger is queued for later evaluation -- it may not be queued
 	// if the Val is null or it's disabled.
-	bool Cache(const CallExpr* expr, Val* val);
-	Val* Lookup(const CallExpr*);
+	bool Cache(const zeek::detail::CallExpr* expr, Val* val);
+	Val* Lookup(const zeek::detail::CallExpr*);
 
 	// Disable this trigger completely. Needed because Unref'ing the trigger
 	// may not immediately delete it as other references may still exist.
@@ -87,14 +91,14 @@ private:
 	friend class TriggerTimer;
 
 	void Init();
-	void Register(ID* id);
+	void Register(zeek::detail::ID* id);
 	void Register(Val* val);
 	void UnregisterAll();
 
-	Expr* cond;
-	Stmt* body;
-	Stmt* timeout_stmts;
-	Expr* timeout;
+	zeek::detail::Expr* cond;
+	zeek::detail::Stmt* body;
+	zeek::detail::Stmt* timeout_stmts;
+	zeek::detail::Expr* timeout;
 	double timeout_value;
 	Frame* frame;
 	bool is_return;
@@ -106,11 +110,13 @@ private:
 	bool delayed; // true if a function call is currently being delayed
 	bool disabled;
 
-	std::vector<std::pair<BroObj *, notifier::Modifiable*>> objs;
+	std::vector<std::pair<Obj *, notifier::Modifiable*>> objs;
 
-	using ValCache = std::map<const CallExpr*, Val*>;
+	using ValCache = std::map<const zeek::detail::CallExpr*, Val*>;
 	ValCache cache;
 };
+
+using TriggerPtr = zeek::IntrusivePtr<Trigger>;
 
 class Manager final : public iosource::IOSource {
 public:
@@ -140,4 +146,9 @@ private:
 
 }
 
-extern trigger::Manager* trigger_mgr;
+namespace trigger {
+	using Trigger [[deprecated("Remove in v4.1. Use zeek::detail::trigger::Trigger instead")]] = zeek::detail::trigger::Trigger;
+	using Manager [[deprecated("Remove in v4.1. Use zeek::detail::trigger::Manager instead")]] = zeek::detail::trigger::Manager;
+}
+
+extern zeek::detail::trigger::Manager* trigger_mgr;

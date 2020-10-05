@@ -8,6 +8,11 @@
 
 #include "zeek-config.h"
 #include "logging/WriterBackend.h"
+#include "ZeekArgs.h"
+
+#ifdef __MINGW32__
+#undef VOID
+#endif
 
 // Increase this when making incompatible changes to the plugin API. Note
 // that the constant is never used in C code. It's picked up on by CMake.
@@ -16,16 +21,24 @@
 #define BRO_PLUGIN_BRO_VERSION BRO_VERSION_FUNCTION
 
 class ODesc;
-class Frame;
-class Func;
 class Event;
+
+ZEEK_FORWARD_DECLARE_NAMESPACED(Func, zeek);
+ZEEK_FORWARD_DECLARE_NAMESPACED(Frame, zeek::detail);
+
+namespace zeek {
 template <class T> class IntrusivePtr;
+using ValPtr = zeek::IntrusivePtr<Val>;
+class Obj;
+}
+
+using BroObj [[deprecated("Remove in v4.1. Use zeek::Obj instead.")]] = zeek::Obj;
 
 namespace threading {
 struct Field;
 }
 
-namespace plugin  {
+namespace zeek::plugin  {
 
 class Manager;
 class Component;
@@ -59,25 +72,15 @@ enum HookType {
 /**
  * Converts a hook type into a readable hook name.
  */
-extern const char* hook_name(HookType h);
+extern const char* hook_name(zeek::plugin::HookType h);
 
 /**
  * Helper class to capture a plugin's version.
  * */
 struct VersionNumber {
-	int major; //< Major version number.
-	int minor; //< Minor version number.
-	int patch; //< Patch version number (available since Zeek 3.0).
-
-	/**
-	 *  Constructor.
-	 */
-	VersionNumber()	{
-		// Major and minor versions are required.
-		major = minor = -1;
-		// Patch version is optional, and set to 0 if not manually set.
-		patch = 0;
-	}
+	int major = -1; //< Major version number.
+	int minor = -1; //< Minor version number.
+	int patch = 0;  //< Patch version number (available since Zeek 3.0).
 
 	/**
 	 *  Returns true if the version is set to a non-negative value.
@@ -90,14 +93,17 @@ struct VersionNumber {
  */
 class Configuration {
 public:
-	std::string name;		//< The plugin's name, including a namespace. Mandatory.
-	std::string description;	//< A short textual description of the plugin. Mandatory.
-	VersionNumber version;		//< THe plugin's version. Optional.
+	std::string name = "";			//< The plugin's name, including a namespace. Mandatory.
+	std::string description= "";	//< A short textual description of the plugin. Mandatory.
+	VersionNumber version;			//< THe plugin's version. Optional.
 
 	// We force this to inline so that the API version gets hardcoded
 	// into the external plugin. (Technically, it's not a "force", just a
 	// strong hint.). The attribute seems generally available.
-	inline Configuration() __attribute__((always_inline));
+	inline Configuration() __attribute__((always_inline))
+		{
+		bro_version = BRO_PLUGIN_BRO_VERSION;
+		}
 
         /**
          * One can assign BRO_PLUGIN_BRO_VERSION to this to catch
@@ -108,13 +114,6 @@ public:
 private:
 	friend class Plugin;
 };
-
-inline Configuration::Configuration()
-		{
-		name = "";
-		description = "";
-		bro_version = BRO_PLUGIN_BRO_VERSION;
-		}
 
 /**
  * A class describing an item defined in \c *.bif file.
@@ -177,7 +176,8 @@ public:
 	 */
 	enum Type {
 		BOOL, DOUBLE, EVENT, FRAME, FUNC, FUNC_RESULT, INT, STRING, VAL,
-		VAL_LIST, VOID, VOIDP, WRITER_INFO, CONN, THREAD_FIELDS, LOCATION
+		VAL_LIST, VOID, VOIDP, WRITER_INFO, CONN, THREAD_FIELDS, LOCATION,
+		ARG_LIST
 	};
 
 	/**
@@ -208,7 +208,7 @@ public:
 	/**
 	 * Constructor with a function argument.
 	 */
-	explicit HookArgument(const Func* a)	{ type = FUNC; arg.func = a; }
+	explicit HookArgument(const zeek::Func* a)	{ type = FUNC; arg.func = a; }
 
 	/**
 	 * Constructor with an integer  argument.
@@ -243,7 +243,7 @@ public:
 	/**
 	 * Constructor with a Frame argument.
 	 */
-	explicit HookArgument(Frame* f)	{ type = FRAME; arg.frame = f; }
+	explicit HookArgument(zeek::detail::Frame* f)	{ type = FRAME; arg.frame = f; }
 
 	/**
 	 * Constructor with a WriterInfo argument.
@@ -258,7 +258,12 @@ public:
 	/**
 	 * Constructor with a location argument.
 	 */
-	explicit HookArgument(const Location* location)	{ type = LOCATION; arg.loc = location; }
+	explicit HookArgument(const zeek::detail::Location* location)	{ type = LOCATION; arg.loc = location; }
+
+	/**
+	 * Constructor with a zeek::Args argument.
+	 */
+	explicit HookArgument(const zeek::Args* args)	{ type = ARG_LIST; arg.args = args; }
 
 	/**
 	 * Returns the value for a boolen argument. The argument's type must
@@ -288,7 +293,7 @@ public:
 	 * Returns the value for a function argument. The argument's type must
 	 * match accordingly.
 	 */
-	const Func* AsFunc() const	{ assert(type == FUNC); return arg.func; }
+	const zeek::Func* AsFunc() const	{ assert(type == FUNC); return arg.func; }
 
 	/**
 	 * Returns the value for an integer argument. The argument's type must
@@ -318,7 +323,7 @@ public:
 	 * Returns the value for a Bro frame argument.  The argument's type must
 	 * match accordingly.
 	 */
-	const Frame* AsFrame() const { assert(type == FRAME); return arg.frame; }
+	const zeek::detail::Frame* AsFrame() const { assert(type == FRAME); return arg.frame; }
 
 	/**
 	 * Returns the value for a logging WriterInfo argument.  The argument's type must
@@ -337,6 +342,11 @@ public:
 	 * match accordingly.
 	 */
 	const val_list* AsValList() const	{ assert(type == VAL_LIST); return arg.vals; }
+
+	/**
+	 * Returns the value as a zeek::Args.
+	 */
+	const zeek::Args* AsArgList() const	{ assert(type == ARG_LIST); return arg.args; }
 
 	/**
 	 * Returns the value for a vod pointer argument. The argument's type
@@ -363,14 +373,15 @@ private:
 		double double_;
 		const Event* event;
 		const Connection* conn;
-		const Func* func;
-		const Frame* frame;
+		const zeek::Func* func;
+		const zeek::detail::Frame* frame;
 		int int_;
 		const Val* val;
 		const val_list* vals;
+		const zeek::Args* args;
 		const void* voidp;
 		const logging::WriterBackend::WriterInfo* winfo;
-		const Location* loc;
+		const zeek::detail::Location* loc;
 	} arg;
 
 	// Outside union because these have dtors.
@@ -379,7 +390,7 @@ private:
 	std::string arg_string;
 };
 
-typedef std::list<HookArgument> HookArgumentList;
+using HookArgumentList = std::list<HookArgument>;
 
 /**
  * Base class for all plugins.
@@ -410,7 +421,7 @@ typedef std::list<HookArgument> HookArgumentList;
  */
 class Plugin {
 public:
-	typedef std::list<Component *> component_list;
+	typedef std::list<zeek::plugin::Component *> component_list;
 	typedef std::list<BifItem> bif_item_list;
 	typedef std::list<std::pair<HookType, int> > hook_list;
 
@@ -525,7 +536,7 @@ public:
 	bool LoadBroFile(const std::string& file);
 
 protected:
-	friend class Manager;
+	friend class zeek::plugin::Manager;
 
 	/**
 	 * First-stage initialization of the plugin called early during Bro's
@@ -555,7 +566,7 @@ protected:
 	 *
 	 * @param c The component. The method takes ownership.
 	 */
-	void AddComponent(Component* c);
+	void AddComponent(zeek::plugin::Component* c);
 
 	/**
 	 * Calls the Initialize() function of all components.
@@ -581,7 +592,7 @@ protected:
 	 * highest to lowest. If two plugins specify the same priority, order
 	 * is undefined.
 	 */
-	void EnableHook(HookType hook, int priority = 0);
+	void EnableHook(zeek::plugin::HookType hook, int priority = 0);
 
 	/**
 	 * Disables a hook. Bro will no longer call the corresponding virtual
@@ -589,7 +600,7 @@ protected:
 	 *
 	 * @param hook The hook to disable.
 	 */
-	void DisableHook(HookType hook);
+	void DisableHook(zeek::plugin::HookType hook);
 
 	/**
 	 * Returns a list of hooks that are currently enabled for the plugin,
@@ -609,7 +620,7 @@ protected:
 	void RequestEvent(EventHandlerPtr handler);
 
 	/**
-	 * Registers interest in the destruction of a BroObj instance. When
+	 * Registers interest in the destruction of a Obj instance. When
 	 * Bro's reference counting triggers the objects destructor to run,
 	 * \a HookBroObjDtor will be called.
 	 *
@@ -617,7 +628,7 @@ protected:
 	 *
 	 * @param handler The object being interested in.
 	 */
-	void RequestBroObjDtor(BroObj* obj);
+	void RequestBroObjDtor(zeek::Obj* obj);
 
 	// Hook functions.
 
@@ -664,13 +675,16 @@ protected:
 	 * in place as long as it ensures matching types and correct reference
 	 * counting.
 	 *
-	 * @return If the plugin handled the call, a std::pair<bool, Val*> with the
-	 * processed flag set to true, and a value set on the object with
-	 * a+1 reference count containing the result value to pass back to the
-	 * interpreter.  If the plugin did not handle the call, it must
-	 * return a pair with the processed flag set to 'false'.
+	 * @return If the plugin handled the call, a pair with the first member
+	 * set to true, and a Val representing the result value to pass back to the
+	 * interpreter. If the plugin did not handle the call, it must return a
+	 * pair with the first member set to 'false' and null result value.
 	 */
-	virtual std::pair<bool, Val*> HookCallFunction(const Func* func, Frame *parent, val_list* args);
+	virtual std::pair<bool, ValPtr>
+	HookFunctionCall(const zeek::Func* func, zeek::detail::Frame* parent, zeek::Args* args);
+
+	[[deprecated("Remove in v4.1.  Use HookFunctionCall()")]]
+	virtual std::pair<bool, Val*> HookCallFunction(const zeek::Func* func, zeek::detail::Frame *parent, val_list* args);
 
 	/**
 	 * Hook into raising events. Whenever the script interpreter is about
@@ -822,39 +836,12 @@ protected:
 	 */
 	virtual bool HookReporter(const std::string& prefix, const EventHandlerPtr event,
 	                          const Connection* conn, const val_list* addl, bool location,
-	                          const Location* location1, const Location* location2,
+	                          const zeek::detail::Location* location1, const zeek::detail::Location* location2,
 	                          bool time, const std::string& message);
 
 	// Meta hooks.
-
-	/**
-	 * A meta hook called just before another hook gets to execute. This
-	 * will be called independent of whether there's an implementation
-	 * for the hook.
-	 *
-	 * hook: The name of the hook about the execute. This will be the
-	 * same as the corresponding method name (e.g., \c HookQueueEvent).
-	 *
-	 * hook: The type of the hook about to execute.
-	 *
-	 * args: A list of the hooks arguments.
-	 */
-	virtual void MetaHookPre(HookType hook, const HookArgumentList& args);
-
-	/**
-	 * A meta hook called just after another hook got to execute. This
-	 * will be called independent of whether there's an implementation
-	 * for the hook.
-	 *
-	 * hook: The type of the hook that finished executing.
-	 *
-	 * args: A list of the hooks arguments.
-	 *
-	 * result: The result that executing the hook returned. If there's no
-	 * implementation for the hook, this will be the default result. If
-	 * the hook doesn't yield a result, this will be of type VOID.
-	 */
-	virtual void MetaHookPost(HookType hook, const HookArgumentList& args, HookArgument result);
+	virtual void MetaHookPre(zeek::plugin::HookType hook, const HookArgumentList& args);
+	virtual void MetaHookPost(zeek::plugin::HookType hook, const HookArgumentList& args, HookArgument result);
 
 private:
 
@@ -908,4 +895,45 @@ private:
 	bif_item_list bif_items;	// BiF items the plugin provides.
 };
 
-}
+} // namespace zeek::plugin
+
+namespace plugin {
+
+[[deprecated("Remove in v4.1. Use zeek::plugin::hook_name().")]]
+constexpr auto hook_name = zeek::plugin::hook_name;
+
+using VersionNumber [[deprecated("Remove in v4.1. Use zeek::plugin::VersionNumber instead")]] = zeek::plugin::VersionNumber;
+using Configuration [[deprecated("Remove in v4.1. Use zeek::plugin::Configuration instead")]] = zeek::plugin::Configuration;
+using BifItem [[deprecated("Remove in v4.1. Use zeek::plugin::BifItem instead")]] = zeek::plugin::BifItem;
+using HookArgument [[deprecated("Remove in v4.1. Use zeek::plugin::HookArgument instead")]] = zeek::plugin::HookArgument;
+using HookArgumentList [[deprecated("Remove in v4.1. Use zeek::plugin::HookArgumentList instead")]] = zeek::plugin::HookArgumentList;
+using Plugin [[deprecated("Remove in v4.1. Use zeek::plugin::Plugin instead")]] = zeek::plugin::Plugin;
+
+using HookType [[deprecated("Remove in v4.1. Use the zeek::plugin::HookType instead.")]] = zeek::plugin::HookType;
+
+[[deprecated("Remove in v4.1. Use zeek::plugin::HOOK_LOAD_FILE instead.")]]
+constexpr auto HOOK_LOAD_FILE = zeek::plugin::HOOK_LOAD_FILE;
+[[deprecated("Remove in v4.1. Use zeek::plugin::HOOK_CALL_FUNCTION instead.")]]
+constexpr auto HOOK_CALL_FUNCTION = zeek::plugin::HOOK_CALL_FUNCTION;
+[[deprecated("Remove in v4.1. Use zeek::plugin::HOOK_QUEUE_EVENT instead.")]]
+constexpr auto HOOK_QUEUE_EVENT = zeek::plugin::HOOK_QUEUE_EVENT;
+[[deprecated("Remove in v4.1. Use zeek::plugin::HOOK_DRAIN_EVENTS instead.")]]
+constexpr auto HOOK_DRAIN_EVENTS = zeek::plugin::HOOK_DRAIN_EVENTS;
+[[deprecated("Remove in v4.1. Use zeek::plugin::HOOK_UPDATE_NETWORK_TIME instead.")]]
+constexpr auto HOOK_UPDATE_NETWORK_TIME = zeek::plugin::HOOK_UPDATE_NETWORK_TIME;
+[[deprecated("Remove in v4.1. Use zeek::plugin::HOOK_BRO_OBJ_DTOR instead.")]]
+constexpr auto HOOK_BRO_OBJ_DTOR = zeek::plugin::HOOK_BRO_OBJ_DTOR;
+[[deprecated("Remove in v4.1. Use zeek::plugin::HOOK_SETUP_ANALYZER_TREE instead.")]]
+constexpr auto HOOK_SETUP_ANALYZER_TREE = zeek::plugin::HOOK_SETUP_ANALYZER_TREE;
+[[deprecated("Remove in v4.1. Use zeek::plugin::HOOK_LOG_INIT instead.")]]
+constexpr auto HOOK_LOG_INIT = zeek::plugin::HOOK_LOG_INIT;
+[[deprecated("Remove in v4.1. Use zeek::plugin::HOOK_LOG_WRITE instead.")]]
+constexpr auto HOOK_LOG_WRITE = zeek::plugin::HOOK_LOG_WRITE;
+[[deprecated("Remove in v4.1. Use zeek::plugin::HOOK_REPORTER instead.")]]
+constexpr auto HOOK_REPORTER = zeek::plugin::HOOK_REPORTER;
+[[deprecated("Remove in v4.1. Use zeek::plugin::META_HOOK_PRE instead.")]]
+constexpr auto META_HOOK_PRE = zeek::plugin::META_HOOK_PRE;
+[[deprecated("Remove in v4.1. Use zeek::plugin::META_HOOK_POST instead.")]]
+constexpr auto META_HOOK_POST = zeek::plugin::META_HOOK_POST;
+
+} // namespace plugin

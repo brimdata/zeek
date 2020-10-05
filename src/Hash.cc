@@ -5,13 +5,17 @@
 #include "Hash.h"
 #include "digest.h"
 #include "Reporter.h"
-#include "BroString.h"
+#include "ZeekString.h"
 #include "Val.h" // needed for const.bif
 #include "const.bif.netvar_h"
 
 #include "highwayhash/sip_hash.h"
 #include "highwayhash/highwayhash_target.h"
 #include "highwayhash/instruction_sets.h"
+
+alignas(32) uint64_t KeyedHash::shared_highwayhash_key[4];
+alignas(32) uint64_t KeyedHash::cluster_highwayhash_key[4];
+alignas(16) unsigned long long KeyedHash::shared_siphash_key[2];
 
 // we use the following lines to not pull in the highwayhash headers in Hash.h - but to check the types did not change underneath us.
 static_assert(std::is_same<hash64_t, highwayhash::HHResult64>::value, "Highwayhash return values must match hash_x_t");
@@ -40,7 +44,7 @@ void KeyedHash::InitializeSeeds(const std::array<uint32_t, SEED_INIT_SIZE>& seed
 
 void KeyedHash::InitOptions()
 	{
-	calculate_digest(Hash_SHA256, BifConst::digest_salt->Bytes(), BifConst::digest_salt->Len(), reinterpret_cast<unsigned char*>(cluster_highwayhash_key));
+	calculate_digest(Hash_SHA256, zeek::BifConst::digest_salt->Bytes(), zeek::BifConst::digest_salt->Len(), reinterpret_cast<unsigned char*>(cluster_highwayhash_key));
 	}
 
 hash64_t KeyedHash::Hash64(const void* bytes, uint64_t size)
@@ -141,7 +145,7 @@ HashKey::HashKey(const char* s)
 	hash = HashBytes(key, size);
 	}
 
-HashKey::HashKey(const BroString* s)
+HashKey::HashKey(const zeek::String* s)
 	{
 	size = s->Len();
 	key = (void*) s->Bytes();

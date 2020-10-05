@@ -90,18 +90,16 @@ void Manager::InitPreScript()
 
 void Manager::InitPostScript()
 	{
-	auto id = global_scope()->Lookup("Tunnel::vxlan_ports");
+	const auto& id = zeek::detail::global_scope()->Find("Tunnel::vxlan_ports");
 
-	if ( ! (id && id->ID_Val()) )
+	if ( ! (id && id->GetVal()) )
 		reporter->FatalError("Tunnel::vxlan_ports not defined");
 
-	auto table_val = id->ID_Val()->AsTableVal();
-	auto port_list = table_val->ConvertToPureList();
+	auto table_val = id->GetVal()->AsTableVal();
+	auto port_list = table_val->ToPureListVal();
 
 	for ( auto i = 0; i < port_list->Length(); ++i )
-		vxlan_ports.emplace_back(port_list->Index(i)->AsPortVal()->Port());
-
-	Unref(port_list);
+		vxlan_ports.emplace_back(port_list->Idx(i)->AsPortVal()->Port());
 	}
 
 void Manager::DumpDebug()
@@ -156,7 +154,7 @@ bool Manager::EnableAnalyzer(const Tag& tag)
 	return true;
 	}
 
-bool Manager::EnableAnalyzer(EnumVal* val)
+bool Manager::EnableAnalyzer(zeek::EnumVal* val)
 	{
 	Component* p = Lookup(val);
 
@@ -182,7 +180,7 @@ bool Manager::DisableAnalyzer(const Tag& tag)
 	return true;
 	}
 
-bool Manager::DisableAnalyzer(EnumVal* val)
+bool Manager::DisableAnalyzer(zeek::EnumVal* val)
 	{
 	Component* p = Lookup(val);
 
@@ -222,7 +220,7 @@ bool Manager::IsEnabled(const Tag& tag)
 	return p->Enabled();
 	}
 
-bool Manager::IsEnabled(EnumVal* val)
+bool Manager::IsEnabled(zeek::EnumVal* val)
 	{
 	Component* p = Lookup(val);
 
@@ -233,7 +231,7 @@ bool Manager::IsEnabled(EnumVal* val)
 	}
 
 
-bool Manager::RegisterAnalyzerForPort(EnumVal* val, PortVal* port)
+bool Manager::RegisterAnalyzerForPort(zeek::EnumVal* val, zeek::PortVal* port)
 	{
 	Component* p = Lookup(val);
 
@@ -243,7 +241,7 @@ bool Manager::RegisterAnalyzerForPort(EnumVal* val, PortVal* port)
 	return RegisterAnalyzerForPort(p->Tag(), port->PortType(), port->Port());
 	}
 
-bool Manager::UnregisterAnalyzerForPort(EnumVal* val, PortVal* port)
+bool Manager::UnregisterAnalyzerForPort(zeek::EnumVal* val, zeek::PortVal* port)
 	{
 	Component* p = Lookup(val);
 
@@ -355,7 +353,7 @@ Manager::tag_set* Manager::LookupPort(TransportProto proto, uint32_t port, bool 
 	return l;
 	}
 
-Manager::tag_set* Manager::LookupPort(PortVal* val, bool add_if_not_found)
+Manager::tag_set* Manager::LookupPort(zeek::PortVal* val, bool add_if_not_found)
 	{
 	return LookupPort(val->PortType(), val->Port(), add_if_not_found);
 	}
@@ -440,13 +438,15 @@ bool Manager::BuildInitialAnalyzerTree(Connection* conn)
 
 		if ( tcp_contents && ! reass )
 			{
-			const auto& dport = val_mgr->Port(ntohs(conn->RespPort()), TRANSPORT_TCP);
+			static auto tcp_content_delivery_ports_orig = zeek::id::find_val<zeek::TableVal>("tcp_content_delivery_ports_orig");
+			static auto tcp_content_delivery_ports_resp = zeek::id::find_val<zeek::TableVal>("tcp_content_delivery_ports_resp");
+			const auto& dport = zeek::val_mgr->Port(ntohs(conn->RespPort()), TRANSPORT_TCP);
 
 			if ( ! reass )
-				reass = (bool)tcp_content_delivery_ports_orig->Lookup(dport.get());
+				reass = (bool)tcp_content_delivery_ports_orig->FindOrDefault(dport);
 
 			if ( ! reass )
-				reass = (bool)tcp_content_delivery_ports_resp->Lookup(dport.get());
+				reass = (bool)tcp_content_delivery_ports_resp->FindOrDefault(dport);
 			}
 
 		if ( reass )
@@ -462,8 +462,10 @@ bool Manager::BuildInitialAnalyzerTree(Connection* conn)
 			uint16_t resp_port = ntohs(conn->RespPort());
 			if ( resp_port == 22 || resp_port == 23 || resp_port == 513 )
 				{
-				AddrVal src(conn->OrigAddr());
-				if ( ! stp_skip_src->Lookup(&src) )
+				static auto stp_skip_src = zeek::id::find_val<zeek::TableVal>("stp_skip_src");
+				auto src = zeek::make_intrusive<zeek::AddrVal>(conn->OrigAddr());
+
+				if ( ! stp_skip_src->FindOrDefault(src) )
 					tcp->AddChildAnalyzer(new stepping_stone::SteppingStone_Analyzer(conn), false);
 				}
 			}
@@ -571,11 +573,12 @@ void Manager::ScheduleAnalyzer(const IPAddr& orig, const IPAddr& resp,
 		ScheduleAnalyzer(orig, resp, resp_p, proto, tag, timeout);
 	}
 
-void Manager::ScheduleAnalyzer(const IPAddr& orig, const IPAddr& resp, PortVal* resp_p,
-			       Val* analyzer, double timeout)
+void Manager::ScheduleAnalyzer(const IPAddr& orig, const IPAddr& resp, zeek::PortVal* resp_p,
+                               zeek::Val* analyzer, double timeout)
 	{
-	EnumVal* ev = analyzer->AsEnumVal();
-	return ScheduleAnalyzer(orig, resp, resp_p->Port(), resp_p->PortType(), Tag(ev), timeout);
+	zeek::EnumValPtr ev{zeek::NewRef{}, analyzer->AsEnumVal()};
+	return ScheduleAnalyzer(orig, resp, resp_p->Port(), resp_p->PortType(),
+	                        Tag(std::move(ev)), timeout);
 	}
 
 Manager::tag_set Manager::GetScheduled(const Connection* conn)
@@ -626,8 +629,7 @@ bool Manager::ApplyScheduledAnalyzers(Connection* conn, bool init, TransportLaye
 
 		if ( scheduled_analyzer_applied )
 			conn->EnqueueEvent(scheduled_analyzer_applied, nullptr,
-			                   conn->ConnVal(),
-			                   IntrusivePtr{NewRef{}, it->AsEnumVal()});
+			                   conn->ConnVal(), it->AsVal());
 
 		DBG_ANALYZER_ARGS(conn, "activated %s analyzer as scheduled",
 		                  analyzer_mgr->GetComponentName(*it).c_str());

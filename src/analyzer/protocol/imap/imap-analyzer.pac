@@ -45,7 +45,7 @@ refine connection IMAP_Conn += {
 				bro_analyzer()->StartTLS();
 
 				if ( imap_starttls )
-					BifEvent::enqueue_imap_starttls(bro_analyzer(), bro_analyzer()->Conn());
+					zeek::BifEvent::enqueue_imap_starttls(bro_analyzer(), bro_analyzer()->Conn());
 				}
 			else
 				reporter->Weird(bro_analyzer()->Conn(), "IMAP: server refused StartTLS");
@@ -59,15 +59,15 @@ refine connection IMAP_Conn += {
 		if ( ! imap_capabilities )
 			return true;
 
-		auto capv = make_intrusive<VectorVal>(internal_type("string_vec")->AsVectorType());
+		auto capv = zeek::make_intrusive<zeek::VectorVal>(zeek::id::string_vec);
 
 		for ( unsigned int i = 0; i< capabilities->size(); i++ )
 			{
 			const bytestring& capability = (*capabilities)[i]->cap();
-			capv->Assign(i, make_intrusive<StringVal>(capability.length(), (const char*)capability.data()));
+			capv->Assign(i, zeek::make_intrusive<zeek::StringVal>(capability.length(), (const char*)capability.data()));
 			}
 
-		BifEvent::enqueue_imap_capabilities(bro_analyzer(), bro_analyzer()->Conn(), std::move(capv));
+		zeek::BifEvent::enqueue_imap_capabilities(bro_analyzer(), bro_analyzer()->Conn(), std::move(capv));
 		return true;
 		%}
 

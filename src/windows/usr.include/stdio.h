@@ -6,9 +6,7 @@
 extern "C" {
 #endif
 
-#ifndef L_tmpnam_s
-#define L_tmpnam_s L_tmpnam
-#endif
+#define setlinebuf(stream) setvbuf((stream), (char *)NULL, _IOLBF, 0)
 
 int vasprintf(char **ptr, const char *format, va_list arg);
 

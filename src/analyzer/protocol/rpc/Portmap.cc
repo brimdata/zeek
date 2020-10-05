@@ -29,28 +29,28 @@ bool PortmapperInterp::RPC_BuildCall(RPC_CallInfo* c, const u_char*& buf, int& n
 
 	case PMAPPROC_SET:
 		{
-		Val* m = ExtractMapping(buf, n);
+		auto m = ExtractMapping(buf, n);
 		if ( ! m )
 			return false;
-		c->AddVal(m);
+		c->AddVal(std::move(m));
 		}
 		break;
 
 	case PMAPPROC_UNSET:
 		{
-		Val* m = ExtractMapping(buf, n);
+		auto m = ExtractMapping(buf, n);
 		if ( ! m )
 			return false;
-		c->AddVal(m);
+		c->AddVal(std::move(m));
 		}
 		break;
 
 	case PMAPPROC_GETPORT:
 		{
-		Val* pr = ExtractPortRequest(buf, n);
+		auto pr = ExtractPortRequest(buf, n);
 		if ( ! pr )
 			return false;
-		c->AddVal(pr);
+		c->AddVal(std::move(pr));
 		}
 		break;
 
@@ -59,10 +59,10 @@ bool PortmapperInterp::RPC_BuildCall(RPC_CallInfo* c, const u_char*& buf, int& n
 
 	case PMAPPROC_CALLIT:
 		{
-		Val* call_it = ExtractCallItRequest(buf, n);
+		auto call_it = ExtractCallItRequest(buf, n);
 		if ( ! call_it )
 			return false;
-		c->AddVal(call_it);
+		c->AddVal(std::move(call_it));
 		}
 		break;
 
@@ -79,7 +79,7 @@ bool PortmapperInterp::RPC_BuildReply(RPC_CallInfo* c, BifEnum::rpc_status statu
 				     int reply_len)
 	{
 	EventHandlerPtr event;
-	Val *reply = nullptr;
+	zeek::ValPtr reply;
 	int success = (status == BifEnum::RPC_SUCCESS);
 
 	switch ( c->Proc() ) {
@@ -94,7 +94,7 @@ bool PortmapperInterp::RPC_BuildReply(RPC_CallInfo* c, BifEnum::rpc_status statu
 			if ( ! buf )
 				return false;
 
-			reply = val_mgr->Bool(status)->Ref();
+			reply = zeek::val_mgr->Bool(status);
 			event = pm_request_set;
 			}
 		else
@@ -109,7 +109,7 @@ bool PortmapperInterp::RPC_BuildReply(RPC_CallInfo* c, BifEnum::rpc_status statu
 			if ( ! buf )
 				return false;
 
-			reply = val_mgr->Bool(status)->Ref();
+			reply = zeek::val_mgr->Bool(status);
 			event = pm_request_unset;
 			}
 		else
@@ -124,10 +124,10 @@ bool PortmapperInterp::RPC_BuildReply(RPC_CallInfo* c, BifEnum::rpc_status statu
 			if ( ! buf )
 				return false;
 
-			RecordVal* rv = c->RequestVal()->AsRecordVal();
-			Val* is_tcp = rv->Lookup(2);
-			reply = val_mgr->Port(CheckPort(port), is_tcp->IsOne() ?
-			                      TRANSPORT_TCP : TRANSPORT_UDP)->Ref();
+			zeek::RecordVal* rv = c->RequestVal()->AsRecordVal();
+			const auto& is_tcp = rv->GetField(2);
+			reply = zeek::val_mgr->Port(CheckPort(port), is_tcp->IsOne() ?
+			                      TRANSPORT_TCP : TRANSPORT_UDP);
 			event = pm_request_getport;
 			}
 		else
@@ -138,28 +138,26 @@ bool PortmapperInterp::RPC_BuildReply(RPC_CallInfo* c, BifEnum::rpc_status statu
 		event = success ? pm_request_dump : pm_attempt_dump;
 		if ( success )
 			{
-			TableVal* mappings = new TableVal({NewRef{}, pm_mappings});
+			static auto pm_mappings = zeek::id::find_type<zeek::TableType>("pm_mappings");
+			auto mappings = zeek::make_intrusive<zeek::TableVal>(pm_mappings);
 			uint32_t nmap = 0;
 
 			// Each call in the loop test pulls the next "opted"
 			// element to see if there are more mappings.
 			while ( extract_XDR_uint32(buf, n) && buf )
 				{
-				Val* m = ExtractMapping(buf, n);
+				auto m = ExtractMapping(buf, n);
 				if ( ! m )
 					break;
 
-				auto index = val_mgr->Count(++nmap);
-				mappings->Assign(index.get(), m);
+				auto index = zeek::val_mgr->Count(++nmap);
+				mappings->Assign(std::move(index), std::move(m));
 				}
 
 			if ( ! buf )
-				{
-				Unref(mappings);
 				return false;
-				}
 
-			reply = mappings;
+			reply = std::move(mappings);
 			event = pm_request_dump;
 			}
 		else
@@ -176,7 +174,7 @@ bool PortmapperInterp::RPC_BuildReply(RPC_CallInfo* c, BifEnum::rpc_status statu
 			if ( ! opaque_reply )
 				return false;
 
-			reply = val_mgr->Port(CheckPort(port), TRANSPORT_UDP)->Ref();
+			reply = zeek::val_mgr->Port(CheckPort(port), TRANSPORT_UDP);
 			event = pm_request_callit;
 			}
 		else
@@ -187,67 +185,61 @@ bool PortmapperInterp::RPC_BuildReply(RPC_CallInfo* c, BifEnum::rpc_status statu
 		return false;
 	}
 
-	Event(event, c->TakeRequestVal(), status, reply);
+	Event(event, c->TakeRequestVal(), status, std::move(reply));
 	return true;
 	}
 
-Val* PortmapperInterp::ExtractMapping(const u_char*& buf, int& len)
+zeek::ValPtr PortmapperInterp::ExtractMapping(const u_char*& buf, int& len)
 	{
-	RecordVal* mapping = new RecordVal(pm_mapping);
+	static auto pm_mapping = zeek::id::find_type<zeek::RecordType>("pm_mapping");
+	auto mapping = zeek::make_intrusive<zeek::RecordVal>(pm_mapping);
 
-	mapping->Assign(0, val_mgr->Count(extract_XDR_uint32(buf, len)));
-	mapping->Assign(1, val_mgr->Count(extract_XDR_uint32(buf, len)));
+	mapping->Assign(0, zeek::val_mgr->Count(extract_XDR_uint32(buf, len)));
+	mapping->Assign(1, zeek::val_mgr->Count(extract_XDR_uint32(buf, len)));
 
 	bool is_tcp = extract_XDR_uint32(buf, len) == IPPROTO_TCP;
 	uint32_t port = extract_XDR_uint32(buf, len);
-	mapping->Assign(2, val_mgr->Port(CheckPort(port), is_tcp ? TRANSPORT_TCP : TRANSPORT_UDP));
+	mapping->Assign(2, zeek::val_mgr->Port(CheckPort(port), is_tcp ? TRANSPORT_TCP : TRANSPORT_UDP));
 
 	if ( ! buf )
-		{
-		Unref(mapping);
 		return nullptr;
-		}
 
 	return mapping;
 	}
 
-Val* PortmapperInterp::ExtractPortRequest(const u_char*& buf, int& len)
+zeek::ValPtr PortmapperInterp::ExtractPortRequest(const u_char*& buf, int& len)
 	{
-	RecordVal* pr = new RecordVal(pm_port_request);
+	static auto pm_port_request = zeek::id::find_type<zeek::RecordType>("pm_port_request");
+	auto pr = zeek::make_intrusive<zeek::RecordVal>(pm_port_request);
 
-	pr->Assign(0, val_mgr->Count(extract_XDR_uint32(buf, len)));
-	pr->Assign(1, val_mgr->Count(extract_XDR_uint32(buf, len)));
+	pr->Assign(0, zeek::val_mgr->Count(extract_XDR_uint32(buf, len)));
+	pr->Assign(1, zeek::val_mgr->Count(extract_XDR_uint32(buf, len)));
 
 	bool is_tcp = extract_XDR_uint32(buf, len) == IPPROTO_TCP;
-	pr->Assign(2, val_mgr->Bool(is_tcp));
+	pr->Assign(2, zeek::val_mgr->Bool(is_tcp));
 	(void) extract_XDR_uint32(buf, len);	// consume the bogus port
 
 	if ( ! buf )
-		{
-		Unref(pr);
 		return nullptr;
-		}
 
 	return pr;
 	}
 
-Val* PortmapperInterp::ExtractCallItRequest(const u_char*& buf, int& len)
+zeek::ValPtr PortmapperInterp::ExtractCallItRequest(const u_char*& buf, int& len)
 	{
-	RecordVal* c = new RecordVal(pm_callit_request);
+	static auto pm_callit_request = zeek::id::find_type<zeek::RecordType>("pm_callit_request");
+	auto c = zeek::make_intrusive<zeek::RecordVal>(pm_callit_request);
 
-	c->Assign(0, val_mgr->Count(extract_XDR_uint32(buf, len)));
-	c->Assign(1, val_mgr->Count(extract_XDR_uint32(buf, len)));
-	c->Assign(2, val_mgr->Count(extract_XDR_uint32(buf, len)));
+	c->Assign(0, zeek::val_mgr->Count(extract_XDR_uint32(buf, len)));
+	c->Assign(1, zeek::val_mgr->Count(extract_XDR_uint32(buf, len)));
+	c->Assign(2, zeek::val_mgr->Count(extract_XDR_uint32(buf, len)));
 
 	int arg_n;
 	(void) extract_XDR_opaque(buf, len, arg_n);
-	c->Assign(3, val_mgr->Count(arg_n));
+	c->Assign(3, zeek::val_mgr->Count(arg_n));
 
 	if ( ! buf )
-		{
-		Unref(c);
 		return nullptr;
-		}
 
 	return c;
 	}
@@ -260,7 +252,7 @@ uint32_t PortmapperInterp::CheckPort(uint32_t port)
 			{
 			analyzer->EnqueueConnEvent(pm_bad_port,
 				analyzer->ConnVal(),
-				val_mgr->Count(port)
+				zeek::val_mgr->Count(port)
 			);
 			}
 
@@ -270,14 +262,10 @@ uint32_t PortmapperInterp::CheckPort(uint32_t port)
 	return port;
 	}
 
-void PortmapperInterp::Event(EventHandlerPtr f, Val* request, BifEnum::rpc_status status, Val* reply)
+void PortmapperInterp::Event(EventHandlerPtr f, zeek::ValPtr request, BifEnum::rpc_status status, zeek::ValPtr reply)
 	{
 	if ( ! f )
-		{
-		Unref(request);
-		Unref(reply);
 		return;
-		}
 
 	zeek::Args vl;
 
@@ -286,16 +274,16 @@ void PortmapperInterp::Event(EventHandlerPtr f, Val* request, BifEnum::rpc_statu
 	if ( status == BifEnum::RPC_SUCCESS )
 		{
 		if ( request )
-			vl.emplace_back(AdoptRef{}, request);
+			vl.emplace_back(std::move(request));
 		if ( reply )
-			vl.emplace_back(AdoptRef{}, reply);
+			vl.emplace_back(std::move(reply));
 		}
 	else
 		{
-		vl.emplace_back(BifType::Enum::rpc_status->GetVal(status));
+		vl.emplace_back(zeek::BifType::Enum::rpc_status->GetEnumVal(status));
 
 		if ( request )
-			vl.emplace_back(AdoptRef{}, request);
+			vl.emplace_back(std::move(request));
 		}
 
 	analyzer->EnqueueConnEvent(f, std::move(vl));

@@ -11,6 +11,7 @@
 #include "File.h"
 #include "Reporter.h"
 #include "ConvertUTF.h"
+#include "IPAddr.h"
 
 #define DEFAULT_SIZE 128
 #define SLOP 10
@@ -196,7 +197,7 @@ void ODesc::AddCS(const char* s)
 	Add(s);
 	}
 
-void ODesc::AddBytes(const BroString* s)
+void ODesc::AddBytes(const zeek::String* s)
 	{
 	if ( IsReadable() )
 		{
@@ -204,7 +205,7 @@ void ODesc::AddBytes(const BroString* s)
 			AddBytes(reinterpret_cast<const char*>(s->Bytes()), s->Len());
 		else
 			{
-			const char* str = s->Render(BroString::EXPANDED_STRING);
+			const char* str = s->Render(zeek::String::EXPANDED_STRING);
 			Add(str);
 			delete [] str;
 			}
@@ -402,19 +403,19 @@ void ODesc::Clear()
 		}
 	}
 
-bool ODesc::PushType(const BroType* type)
+bool ODesc::PushType(const zeek::Type* type)
 	{
 	auto res = encountered_types.insert(type);
 	return std::get<1>(res);
 	}
 
-bool ODesc::PopType(const BroType* type)
+bool ODesc::PopType(const zeek::Type* type)
 	{
 	size_t res = encountered_types.erase(type);
 	return (res == 1);
 	}
 
-bool ODesc::FindType(const BroType* type)
+bool ODesc::FindType(const zeek::Type* type)
 	{
 	auto res = encountered_types.find(type);
 

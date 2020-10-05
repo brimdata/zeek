@@ -1,3 +1,4 @@
+
 // See the file "COPYING" in the main distribution directory for copyright.
 
 #include "zeek-config.h"
@@ -54,23 +55,39 @@
 #include "iosource/PktSrc.h"
 #include "iosource/PktDumper.h"
 
+#include "zeek.bif.func_h"
+#include "stats.bif.func_h"
+#include "reporter.bif.func_h"
+#include "strings.bif.func_h"
+#include "option.bif.func_h"
+#include "supervisor.bif.func_h"
+
+#include "zeek.bif.func_def"
+#include "stats.bif.func_def"
+#include "reporter.bif.func_def"
+#include "strings.bif.func_def"
+#include "option.bif.func_def"
+#include "supervisor.bif.func_def"
+
 extern	RETSIGTYPE sig_handler(int signo);
 
+namespace zeek::detail {
 std::vector<CallInfo> call_stack;
 bool did_builtin_init = false;
+static const std::pair<bool, zeek::ValPtr> empty_hook_result(false, nullptr);
+} // namespace zeek::detail
 
-std::vector<Func*> Func::unique_ids;
-static const std::pair<bool, Val*> empty_hook_result(false, NULL);
+namespace zeek {
 
 std::string render_call_stack()
 	{
 	std::string rval;
 	int lvl = 0;
 
-	if ( ! call_stack.empty() )
+	if ( ! detail::call_stack.empty() )
 		rval += "| ";
 
-	for ( auto it = call_stack.rbegin(); it != call_stack.rend(); ++it )
+	for ( auto it = detail::call_stack.rbegin(); it != detail::call_stack.rend(); ++it )
 		{
 		if ( lvl > 0 )
 			rval += " | ";
@@ -102,7 +119,7 @@ std::string render_call_stack()
 		++lvl;
 		}
 
-	if ( ! call_stack.empty() )
+	if ( ! detail::call_stack.empty() )
 		rval += " |";
 
 	return rval;
@@ -111,33 +128,34 @@ std::string render_call_stack()
 Func::Func()
 	{
 	unique_id = unique_ids.size();
-	unique_ids.push_back(this);
+	unique_ids.push_back({zeek::NewRef{}, this});
 	}
 
 Func::Func(Kind arg_kind) : kind(arg_kind)
 	{
 	unique_id = unique_ids.size();
-	unique_ids.push_back(this);
+	unique_ids.push_back({zeek::NewRef{}, this});
 	}
 
 Func::~Func() = default;
 
-void Func::AddBody(IntrusivePtr<Stmt> /* new_body */, id_list* /* new_inits */,
-		   size_t /* new_frame_size */, int /* priority */)
+void Func::AddBody(zeek::detail::StmtPtr /* new_body */,
+                   const std::vector<zeek::detail::IDPtr>& /* new_inits */,
+                   size_t /* new_frame_size */, int /* priority */)
 	{
 	Internal("Func::AddBody called");
 	}
 
-void Func::SetScope(IntrusivePtr<Scope> newscope)
+void Func::SetScope(zeek::detail::ScopePtr newscope)
 	{
 	scope = std::move(newscope);
 	}
 
-IntrusivePtr<Func> Func::DoClone()
+zeek::FuncPtr Func::DoClone()
 	{
 	// By default, ok just to return a reference. Func does not have any state
 	// that is different across instances.
-	return {NewRef{}, this};
+	return {zeek::NewRef{}, this};
 	}
 
 void Func::DescribeDebug(ODesc* d, const zeek::Args* args) const
@@ -147,7 +165,7 @@ void Func::DescribeDebug(ODesc* d, const zeek::Args* args) const
 	if ( args )
 		{
 		d->Add("(");
-		RecordType* func_args = FType()->Args();
+		const auto& func_args = GetType()->Params();
 		auto num_fields = static_cast<size_t>(func_args->NumFields());
 
 		for ( auto i = 0u; i < args->size(); ++i )
@@ -178,14 +196,14 @@ void Func::DescribeDebug(ODesc* d, const zeek::Args* args) const
 TraversalCode Func::Traverse(TraversalCallback* cb) const
 	{
 	// FIXME: Make a fake scope for builtins?
-	Scope* old_scope = cb->current_scope;
+	zeek::detail::Scope* old_scope = cb->current_scope;
 	cb->current_scope = scope.get();
 
 	TraversalCode tc = cb->PreFunction(this);
 	HANDLE_TC_STMT_PRE(tc);
 
 	// FIXME: Traverse arguments to builtin functions, too.
-	if ( kind == BRO_FUNC && scope )
+	if ( kind == SCRIPT_FUNC && scope )
 		{
 		tc = scope->Traverse(cb);
 		HANDLE_TC_STMT_PRE(tc);
@@ -215,63 +233,74 @@ void Func::CopyStateInto(Func* other) const
 	other->unique_id = unique_id;
 	}
 
-std::pair<bool, Val*> Func::HandlePluginResult(std::pair<bool, Val*> plugin_result, function_flavor flavor) const
+void Func::CheckPluginResult(bool handled, const zeek::ValPtr& hook_result,
+                             zeek::FunctionFlavor flavor) const
 	{
-	// Helper function factoring out this code from BroFunc:Call() for
+	// Helper function factoring out this code from ScriptFunc:Call() for
 	// better readability.
 
-	if( ! plugin_result.first )
+	if ( ! handled )
 		{
-		if( plugin_result.second )
+		if ( hook_result )
 			reporter->InternalError("plugin set processed flag to false but actually returned a value");
 
 		// The plugin result hasn't been processed yet (read: fall
 		// into ::Call method).
-		return plugin_result;
+		return;
 		}
 
 	switch ( flavor ) {
-	case FUNC_FLAVOR_EVENT:
-		if( plugin_result.second )
-			reporter->InternalError("plugin returned non-void result for event %s", this->Name());
+	case zeek::FUNC_FLAVOR_EVENT:
+		if ( hook_result )
+			reporter->InternalError("plugin returned non-void result for event %s",
+			                        this->Name());
 
 		break;
 
-	case FUNC_FLAVOR_HOOK:
-		if ( plugin_result.second->Type()->Tag() != TYPE_BOOL )
-			reporter->InternalError("plugin returned non-bool for hook %s", this->Name());
+	case zeek::FUNC_FLAVOR_HOOK:
+		if ( hook_result->GetType()->Tag() != zeek::TYPE_BOOL )
+			reporter->InternalError("plugin returned non-bool for hook %s",
+			                        this->Name());
 
 		break;
 
-	case FUNC_FLAVOR_FUNCTION:
+	case zeek::FUNC_FLAVOR_FUNCTION:
 		{
-		BroType* yt = FType()->YieldType();
+		const auto& yt = GetType()->Yield();
 
-		if ( (! yt) || yt->Tag() == TYPE_VOID )
+		if ( (! yt) || yt->Tag() == zeek::TYPE_VOID )
 			{
-			if( plugin_result.second )
-				reporter->InternalError("plugin returned non-void result for void method %s", this->Name());
+			if ( hook_result )
+				reporter->InternalError("plugin returned non-void result for void method %s",
+				                        this->Name());
 			}
 
-		else if ( plugin_result.second && plugin_result.second->Type()->Tag() != yt->Tag() && yt->Tag() != TYPE_ANY)
+		else if ( hook_result && hook_result->GetType()->Tag() != yt->Tag() && yt->Tag() != zeek::TYPE_ANY )
 			{
 			reporter->InternalError("plugin returned wrong type (got %d, expecting %d) for %s",
-						plugin_result.second->Type()->Tag(), yt->Tag(), this->Name());
+			                        hook_result->GetType()->Tag(), yt->Tag(), this->Name());
 			}
 
 		break;
 		}
 	}
-
-	return plugin_result;
 	}
 
-BroFunc::BroFunc(ID* arg_id, IntrusivePtr<Stmt> arg_body, id_list* aggr_inits,
-                 size_t arg_frame_size, int priority)
-	: Func(BRO_FUNC)
+zeek::Val* Func::Call(val_list* args, zeek::detail::Frame* parent) const
+	{
+	auto zargs = zeek::val_list_to_args(*args);
+	return Invoke(&zargs, parent).release();
+	};
+
+namespace detail {
+
+ScriptFunc::ScriptFunc(const zeek::detail::IDPtr& arg_id, zeek::detail::StmtPtr arg_body,
+                       const std::vector<zeek::detail::IDPtr>& aggr_inits,
+                       size_t arg_frame_size, int priority)
+	: Func(SCRIPT_FUNC)
 	{
 	name = arg_id->Name();
-	type = {NewRef{}, arg_id->Type()};
+	type = arg_id->GetType<zeek::FuncType>();
 	frame_size = arg_frame_size;
 
 	if ( arg_body )
@@ -283,24 +312,19 @@ BroFunc::BroFunc(ID* arg_id, IntrusivePtr<Stmt> arg_body, id_list* aggr_inits,
 		}
 	}
 
-BroFunc::~BroFunc()
+ScriptFunc::~ScriptFunc()
 	{
 	if ( ! weak_closure_ref )
 		Unref(closure);
 	}
 
-bool BroFunc::IsPure() const
+bool ScriptFunc::IsPure() const
 	{
 	return std::all_of(bodies.begin(), bodies.end(),
 		[](const Body& b) { return b.stmts->IsPure(); });
 	}
 
-IntrusivePtr<Val> Func::Call(val_list* args, Frame* parent) const
-	{
-	return Call(zeek::val_list_to_args(*args), parent);
-	}
-
-IntrusivePtr<Val> BroFunc::Call(const zeek::Args& args, Frame* parent) const
+zeek::ValPtr ScriptFunc::Invoke(zeek::Args* args, zeek::detail::Frame* parent) const
 	{
 #ifdef PROFILE_BRO_FUNCTIONS
 	DEBUG_MSG("Function: %s\n", Name());
@@ -310,21 +334,23 @@ IntrusivePtr<Val> BroFunc::Call(const zeek::Args& args, Frame* parent) const
 	if ( sample_logger )
 		sample_logger->FunctionSeen(this);
 
-	std::pair<bool, Val*> plugin_result = PLUGIN_HOOK_WITH_RESULT(HOOK_CALL_FUNCTION, HookCallFunction(this, parent, args), empty_hook_result);
+	auto [handled, hook_result] = PLUGIN_HOOK_WITH_RESULT(HOOK_CALL_FUNCTION,
+	                                                      HookCallFunction(this, parent, args),
+	                                                      empty_hook_result);
 
-	plugin_result = HandlePluginResult(plugin_result,  Flavor());
+	CheckPluginResult(handled, hook_result, Flavor());
 
-	if( plugin_result.first )
-		return {AdoptRef{}, plugin_result.second};
+	if ( handled )
+		return hook_result;
 
 	if ( bodies.empty() )
 		{
 		// Can only happen for events and hooks.
-		assert(Flavor() == FUNC_FLAVOR_EVENT || Flavor() == FUNC_FLAVOR_HOOK);
-		return Flavor() == FUNC_FLAVOR_HOOK ? val_mgr->True() : nullptr;
+		assert(Flavor() == zeek::FUNC_FLAVOR_EVENT || Flavor() == zeek::FUNC_FLAVOR_HOOK);
+		return Flavor() == zeek::FUNC_FLAVOR_HOOK ? zeek::val_mgr->True() : nullptr;
 		}
 
-	auto f = make_intrusive<Frame>(frame_size, this, &args);
+	auto f = zeek::make_intrusive<zeek::detail::Frame>(frame_size, this, args);
 
 	if ( closure )
 		f->CaptureClosure(closure, outer_ids);
@@ -332,25 +358,25 @@ IntrusivePtr<Val> BroFunc::Call(const zeek::Args& args, Frame* parent) const
 	// Hand down any trigger.
 	if ( parent )
 		{
-		f->SetTrigger({NewRef{}, parent->GetTrigger()});
+		f->SetTrigger({zeek::NewRef{}, parent->GetTrigger()});
 		f->SetCall(parent->GetCall());
 		}
 
 	g_frame_stack.push_back(f.get());	// used for backtracing
-	const CallExpr* call_expr = parent ? parent->GetCall() : nullptr;
-	call_stack.emplace_back(CallInfo{call_expr, this, args});
+	const zeek::detail::CallExpr* call_expr = parent ? parent->GetCall() : nullptr;
+	call_stack.emplace_back(CallInfo{call_expr, this, *args});
 
 	if ( g_trace_state.DoTrace() )
 		{
 		ODesc d;
-		DescribeDebug(&d, &args);
+		DescribeDebug(&d, args);
 
 		g_trace_state.LogTrace("%s called: %s\n",
-			FType()->FlavorString().c_str(), d.Description());
+			GetType()->FlavorString().c_str(), d.Description());
 		}
 
 	stmt_flow_type flow = FLOW_NEXT;
-	IntrusivePtr<Val> result;
+	zeek::ValPtr result;
 
 	for ( const auto& body : bodies )
 		{
@@ -359,16 +385,16 @@ IntrusivePtr<Val> BroFunc::Call(const zeek::Args& args, Frame* parent) const
 				body.stmts->GetLocationInfo());
 
 		// Fill in the rest of the frame with the function's arguments.
-		for ( auto j = 0u; j < args.size(); ++j )
+		for ( auto j = 0u; j < args->size(); ++j )
 			{
-			Val* arg = args[j].get();
+			const auto& arg = (*args)[j];
 
-			if ( f->NthElement(j) != arg )
+			if ( f->GetElement(j) != arg )
 				// Either not yet set, or somebody reassigned the frame slot.
-				f->SetElement(j, arg->Ref());
+				f->SetElement(j, arg);
 			}
 
-		f->Reset(args.size());
+		f->Reset(args->size());
 
 		try
 			{
@@ -378,7 +404,7 @@ IntrusivePtr<Val> BroFunc::Call(const zeek::Args& args, Frame* parent) const
 		catch ( InterpreterException& e )
 			{
 			// Already reported, but now determine whether to unwind further.
-			if ( Flavor() == FUNC_FLAVOR_FUNCTION )
+			if ( Flavor() == zeek::FUNC_FLAVOR_FUNCTION )
 				{
 				g_frame_stack.pop_back();
 				call_stack.pop_back();
@@ -398,7 +424,7 @@ IntrusivePtr<Val> BroFunc::Call(const zeek::Args& args, Frame* parent) const
 			break;
 			}
 
-		if ( Flavor() == FUNC_FLAVOR_HOOK )
+		if ( Flavor() == zeek::FUNC_FLAVOR_HOOK )
 			{
 			// Ignore any return values of hook bodies, final return value
 			// depends on whether a body returns as a result of break statement.
@@ -407,7 +433,7 @@ IntrusivePtr<Val> BroFunc::Call(const zeek::Args& args, Frame* parent) const
 			if ( flow == FLOW_BREAK )
 				{
 				// Short-circuit execution of remaining hook handler bodies.
-				result = val_mgr->False();
+				result = zeek::val_mgr->False();
 				break;
 				}
 			}
@@ -415,15 +441,15 @@ IntrusivePtr<Val> BroFunc::Call(const zeek::Args& args, Frame* parent) const
 
 	call_stack.pop_back();
 
-	if ( Flavor() == FUNC_FLAVOR_HOOK )
+	if ( Flavor() == zeek::FUNC_FLAVOR_HOOK )
 		{
 		if ( ! result )
-			result = val_mgr->True();
+			result = zeek::val_mgr->True();
 		}
 
 	// Warn if the function returns something, but we returned from
 	// the function without an explicit return, or without a value.
-	else if ( FType()->YieldType() && FType()->YieldType()->Tag() != TYPE_VOID &&
+	else if ( GetType()->Yield() && GetType()->Yield()->Tag() != zeek::TYPE_VOID &&
 		 (flow != FLOW_RETURN /* we fell off the end */ ||
 		  ! result /* explicit return with no result */) &&
 		 ! f->HasDelayed() )
@@ -443,20 +469,21 @@ IntrusivePtr<Val> BroFunc::Call(const zeek::Args& args, Frame* parent) const
 	return result;
 	}
 
-void BroFunc::AddBody(IntrusivePtr<Stmt> new_body, id_list* new_inits,
-                      size_t new_frame_size, int priority)
+void ScriptFunc::AddBody(zeek::detail::StmtPtr new_body,
+                         const std::vector<zeek::detail::IDPtr>& new_inits,
+                         size_t new_frame_size, int priority)
 	{
 	if ( new_frame_size > frame_size )
 		frame_size = new_frame_size;
 
-	auto num_args = FType()->Args()->NumFields();
+	auto num_args = GetType()->Params()->NumFields();
 
 	if ( num_args > static_cast<int>(frame_size) )
 		frame_size = num_args;
 
 	new_body = AddInits(std::move(new_body), new_inits);
 
-	if ( Flavor() == FUNC_FLAVOR_FUNCTION )
+	if ( Flavor() == zeek::FUNC_FLAVOR_FUNCTION )
 		{
 		// For functions, we replace the old body with the new one.
 		assert(bodies.size() <= 1);
@@ -471,7 +498,7 @@ void BroFunc::AddBody(IntrusivePtr<Stmt> new_body, id_list* new_inits,
 	sort(bodies.begin(), bodies.end());
 	}
 
-void BroFunc::AddClosure(id_list ids, Frame* f)
+void ScriptFunc::AddClosure(id_list ids, zeek::detail::Frame* f)
 	{
 	if ( ! f )
 		return;
@@ -480,7 +507,7 @@ void BroFunc::AddClosure(id_list ids, Frame* f)
 	SetClosureFrame(f);
 	}
 
-bool BroFunc::StrengthenClosureReference(Frame* f)
+bool ScriptFunc::StrengthenClosureReference(zeek::detail::Frame* f)
 	{
 	if ( closure != f )
 		return false;
@@ -493,10 +520,10 @@ bool BroFunc::StrengthenClosureReference(Frame* f)
 	return true;
 	}
 
-void BroFunc::SetClosureFrame(Frame* f)
+void ScriptFunc::SetClosureFrame(zeek::detail::Frame* f)
 	{
 	if ( closure )
-		reporter->InternalError("Tried to override closure for BroFunc %s.",
+		reporter->InternalError("Tried to override closure for ScriptFunc %s.",
 					Name());
 
 	// Have to use weak references initially because otherwise Ref'ing the
@@ -511,9 +538,9 @@ void BroFunc::SetClosureFrame(Frame* f)
 	f->AddFunctionWithClosureRef(this);
 	}
 
-bool BroFunc::UpdateClosure(const broker::vector& data)
+bool ScriptFunc::UpdateClosure(const broker::vector& data)
 	{
-	auto result = Frame::Unserialize(data);
+	auto result = zeek::detail::Frame::Unserialize(data);
 
 	if ( ! result.first )
 		return false;
@@ -533,11 +560,11 @@ bool BroFunc::UpdateClosure(const broker::vector& data)
 	}
 
 
-IntrusivePtr<Func> BroFunc::DoClone()
+zeek::FuncPtr ScriptFunc::DoClone()
 	{
-	// BroFunc could hold a closure. In this case a clone of it must
+	// ScriptFunc could hold a closure. In this case a clone of it must
 	// store a copy of this closure.
-	auto other = IntrusivePtr{AdoptRef{}, new BroFunc()};
+	auto other = zeek::IntrusivePtr{zeek::AdoptRef{}, new ScriptFunc()};
 
 	CopyStateInto(other.get());
 
@@ -549,12 +576,12 @@ IntrusivePtr<Func> BroFunc::DoClone()
 	return other;
 	}
 
-broker::expected<broker::data> BroFunc::SerializeClosure() const
+broker::expected<broker::data> ScriptFunc::SerializeClosure() const
 	{
-	return Frame::Serialize(closure, outer_ids);
+	return zeek::detail::Frame::Serialize(closure, outer_ids);
 	}
 
-void BroFunc::Describe(ODesc* d) const
+void ScriptFunc::Describe(ODesc* d) const
 	{
 	d->Add(Name());
 
@@ -567,34 +594,36 @@ void BroFunc::Describe(ODesc* d) const
 		}
 	}
 
-IntrusivePtr<Stmt> BroFunc::AddInits(IntrusivePtr<Stmt> body, id_list* inits)
+zeek::detail::StmtPtr ScriptFunc::AddInits(
+	zeek::detail::StmtPtr body,
+	const std::vector<zeek::detail::IDPtr>& inits)
 	{
-	if ( ! inits || inits->length() == 0 )
+	if ( inits.empty() )
 		return body;
 
-	auto stmt_series = make_intrusive<StmtList>();
-	stmt_series->Stmts().push_back(new InitStmt(inits));
+	auto stmt_series = zeek::make_intrusive<zeek::detail::StmtList>();
+	stmt_series->Stmts().push_back(new zeek::detail::InitStmt(inits));
 	stmt_series->Stmts().push_back(body.release());
 
 	return stmt_series;
 	}
 
 BuiltinFunc::BuiltinFunc(built_in_func arg_func, const char* arg_name,
-			bool arg_is_pure)
+                         bool arg_is_pure)
 : Func(BUILTIN_FUNC)
 	{
 	func = arg_func;
 	name = make_full_var_name(GLOBAL_MODULE_NAME, arg_name);
 	is_pure = arg_is_pure;
 
-	auto id = lookup_ID(Name(), GLOBAL_MODULE_NAME, false);
+	const auto& id = zeek::detail::lookup_ID(Name(), GLOBAL_MODULE_NAME, false);
 	if ( ! id )
 		reporter->InternalError("built-in function %s missing", Name());
 	if ( id->HasVal() )
 		reporter->InternalError("built-in function %s multiply defined", Name());
 
-	type = {NewRef{}, id->Type()};
-	id->SetVal(make_intrusive<Val>(this));
+	type = id->GetType<zeek::FuncType>();
+	id->SetVal(zeek::make_intrusive<zeek::Val>(zeek::IntrusivePtr{zeek::NewRef{}, this}));
 	}
 
 BuiltinFunc::~BuiltinFunc()
@@ -606,7 +635,7 @@ bool BuiltinFunc::IsPure() const
 	return is_pure;
 	}
 
-IntrusivePtr<Val> BuiltinFunc::Call(const zeek::Args& args, Frame* parent) const
+zeek::ValPtr BuiltinFunc::Invoke(zeek::Args* args, zeek::detail::Frame* parent) const
 	{
 #ifdef PROFILE_BRO_FUNCTIONS
 	DEBUG_MSG("Function: %s\n", Name());
@@ -616,24 +645,26 @@ IntrusivePtr<Val> BuiltinFunc::Call(const zeek::Args& args, Frame* parent) const
 	if ( sample_logger )
 		sample_logger->FunctionSeen(this);
 
-	std::pair<bool, Val*> plugin_result = PLUGIN_HOOK_WITH_RESULT(HOOK_CALL_FUNCTION, HookCallFunction(this, parent, args), empty_hook_result);
+	auto [handled, hook_result] = PLUGIN_HOOK_WITH_RESULT(HOOK_CALL_FUNCTION,
+	                                                      HookCallFunction(this, parent, args),
+	                                                      empty_hook_result);
 
-	plugin_result = HandlePluginResult(plugin_result, FUNC_FLAVOR_FUNCTION);
+	CheckPluginResult(handled, hook_result, zeek::FUNC_FLAVOR_FUNCTION);
 
-	if ( plugin_result.first )
-		return {AdoptRef{}, plugin_result.second};
+	if ( handled )
+		return hook_result;
 
 	if ( g_trace_state.DoTrace() )
 		{
 		ODesc d;
-		DescribeDebug(&d, &args);
+		DescribeDebug(&d, args);
 
 		g_trace_state.LogTrace("\tBuiltin Function called: %s\n", d.Description());
 		}
 
-	const CallExpr* call_expr = parent ? parent->GetCall() : nullptr;
-	call_stack.emplace_back(CallInfo{call_expr, this, args});
-	auto result = std::move(func(parent, &args).rval);
+	const zeek::detail::CallExpr* call_expr = parent ? parent->GetCall() : nullptr;
+	call_stack.emplace_back(CallInfo{call_expr, this, *args});
+	auto result = std::move(func(parent, args).rval);
 	call_stack.pop_back();
 
 	if ( result && g_trace_state.DoTrace() )
@@ -653,135 +684,9 @@ void BuiltinFunc::Describe(ODesc* d) const
 	d->AddCount(is_pure);
 	}
 
-void builtin_error(const char* msg)
+bool check_built_in_call(BuiltinFunc* f, zeek::detail::CallExpr* call)
 	{
-	builtin_error(msg, IntrusivePtr<Val>{});
-	}
-
-void builtin_error(const char* msg, IntrusivePtr<Val> arg)
-	{
-	builtin_error(msg, arg.get());
-	}
-
-void builtin_error(const char* msg, BroObj* arg)
-	{
-	auto emit = [=](const CallExpr* ce)
-		{
-		if ( ce )
-			ce->Error(msg, arg);
-		else
-			reporter->Error(msg, arg);
-		};
-
-
-	if ( call_stack.empty() )
-		{
-		emit(nullptr);
-		return;
-		}
-
-	auto last_call = call_stack.back();
-
-	if ( call_stack.size() < 2 )
-		{
-		// Don't need to check for wrapper function like "<module>::__<func>"
-		emit(last_call.call);
-		return;
-		}
-
-	auto starts_with_double_underscore = [](const std::string& name) -> bool
-		{ return name.size() > 2 && name[0] == '_' && name[1] == '_'; };
-	std::string last_func = last_call.func->Name();
-
-	auto pos = last_func.find_first_of("::");
-	std::string wrapper_func;
-
-	if ( pos == std::string::npos )
-		{
-		if ( ! starts_with_double_underscore(last_func) )
-			{
-			emit(last_call.call);
-			return;
-			}
-
-		wrapper_func = last_func.substr(2);
-		}
-	else
-		{
-		auto module_name = last_func.substr(0, pos);
-		auto func_name = last_func.substr(pos + 2);
-
-		if ( ! starts_with_double_underscore(func_name) )
-			{
-			emit(last_call.call);
-			return;
-			}
-
-		wrapper_func = module_name + "::" + func_name.substr(2);
-		}
-
-	auto parent_call = call_stack[call_stack.size() - 2];
-	auto parent_func = parent_call.func->Name();
-
-	if ( wrapper_func == parent_func )
-		emit(parent_call.call);
-	else
-		emit(last_call.call);
-	}
-
-#include "zeek.bif.func_h"
-#include "stats.bif.func_h"
-#include "reporter.bif.func_h"
-#include "strings.bif.func_h"
-#include "option.bif.func_h"
-#include "supervisor.bif.func_h"
-
-#include "zeek.bif.func_def"
-#include "stats.bif.func_def"
-#include "reporter.bif.func_def"
-#include "strings.bif.func_def"
-#include "option.bif.func_def"
-#include "supervisor.bif.func_def"
-
-#include "__all__.bif.cc" // Autogenerated for compiling in the bif_target() code.
-#include "__all__.bif.register.cc" // Autogenerated for compiling in the bif_target() code.
-
-void init_builtin_funcs()
-	{
-	ProcStats = internal_type("ProcStats")->AsRecordType();
-	NetStats = internal_type("NetStats")->AsRecordType();
-	MatcherStats = internal_type("MatcherStats")->AsRecordType();
-	ConnStats = internal_type("ConnStats")->AsRecordType();
-	ReassemblerStats = internal_type("ReassemblerStats")->AsRecordType();
-	DNSStats = internal_type("DNSStats")->AsRecordType();
-	GapStats = internal_type("GapStats")->AsRecordType();
-	EventStats = internal_type("EventStats")->AsRecordType();
-	TimerStats = internal_type("TimerStats")->AsRecordType();
-	FileAnalysisStats = internal_type("FileAnalysisStats")->AsRecordType();
-	ThreadStats = internal_type("ThreadStats")->AsRecordType();
-	BrokerStats = internal_type("BrokerStats")->AsRecordType();
-	ReporterStats = internal_type("ReporterStats")->AsRecordType();
-
-	var_sizes = internal_type("var_sizes")->AsTableType();
-
-#include "zeek.bif.func_init"
-#include "stats.bif.func_init"
-#include "reporter.bif.func_init"
-#include "strings.bif.func_init"
-#include "option.bif.func_init"
-#include "supervisor.bif.func_init"
-
-	did_builtin_init = true;
-	}
-
-void init_builtin_funcs_subdirs()
-{
-	#include "__all__.bif.init.cc" // Autogenerated for compiling in the bif_target() code.
-}
-
-bool check_built_in_call(BuiltinFunc* f, CallExpr* call)
-	{
-	if ( f->TheFunc() != BifFunc::bro_fmt )
+	if ( f->TheFunc() != zeek::BifFunc::fmt_bif)
 		return true;
 
 	const expr_list& args = call->Args()->Exprs();
@@ -792,8 +697,8 @@ bool check_built_in_call(BuiltinFunc* f, CallExpr* call)
 		return true;
 		}
 
-	const Expr* fmt_str_arg = args[0];
-	if ( fmt_str_arg->Type()->Tag() != TYPE_STRING )
+	const zeek::detail::Expr* fmt_str_arg = args[0];
+	if ( fmt_str_arg->GetType()->Tag() != zeek::TYPE_STRING )
 		{
 		call->Error("first argument to fmt() needs to be a format string");
 		return false;
@@ -834,22 +739,22 @@ bool check_built_in_call(BuiltinFunc* f, CallExpr* call)
 
 // Gets a function's priority from its Scope's attributes. Errors if it sees any
 // problems.
-static int get_func_priority(const attr_list& attrs)
+static int get_func_priority(const std::vector<zeek::detail::AttrPtr>& attrs)
 	{
 	int priority = 0;
 
 	for ( const auto& a : attrs )
 		{
-		if ( a->Tag() == ATTR_DEPRECATED )
+		if ( a->Tag() == zeek::detail::ATTR_DEPRECATED )
 			continue;
 
-		if ( a->Tag() != ATTR_PRIORITY )
+		if ( a->Tag() != zeek::detail::ATTR_PRIORITY )
 			{
 			a->Error("illegal attribute for function body");
 			continue;
 			}
 
-		auto v = a->AttrExpr()->Eval(nullptr);
+		auto v = a->GetExpr()->Eval(nullptr);
 
 		if ( ! v )
 			{
@@ -857,7 +762,7 @@ static int get_func_priority(const attr_list& attrs)
 			continue;
 			}
 
-		if ( ! IsIntegral(v->Type()->Tag()) )
+		if ( ! zeek::IsIntegral(v->GetType()->Tag()) )
 			{
 			a->Error("expression is not of integral type");
 			continue;
@@ -869,31 +774,200 @@ static int get_func_priority(const attr_list& attrs)
 	return priority;
 	}
 
-function_ingredients::function_ingredients(IntrusivePtr<Scope> scope, IntrusivePtr<Stmt> body)
+function_ingredients::function_ingredients(zeek::detail::ScopePtr scope, zeek::detail::StmtPtr body)
 	{
 	frame_size = scope->Length();
 	inits = scope->GetInits();
 
 	this->scope = std::move(scope);
-	id = {NewRef{}, this->scope->ScopeID()};
+	id = this->scope->GetID();
 
-	auto attrs = this->scope->Attrs();
+	const auto& attrs = this->scope->Attrs();
 
 	priority = (attrs ? get_func_priority(*attrs) : 0);
 	this->body = std::move(body);
 	}
 
-function_ingredients::~function_ingredients()
+static void emit_builtin_error_common(const char* msg, Obj* arg, bool unwind)
 	{
-	for ( const auto& i : *inits )
-		Unref(i);
+	auto emit = [=](const zeek::detail::CallExpr* ce)
+		{
+		if ( ce )
+			{
+			if ( unwind )
+				{
+				if ( arg )
+					{
+					ODesc d;
+					arg->Describe(&d);
+					reporter->ExprRuntimeError(ce, "%s (%s), during call:", msg,
+					                           d.Description());
+					}
+				else
+					reporter->ExprRuntimeError(ce, "%s", msg);
+				}
+			else
+				ce->Error(msg, arg);
+			}
+		else
+			{
+			if ( arg )
+				{
+				if ( unwind )
+					reporter->RuntimeError(arg->GetLocationInfo(), "%s", msg);
+				else
+					arg->Error(msg);
+				}
+			else
+				{
+				if ( unwind )
+					reporter->RuntimeError(nullptr, "%s", msg);
+				else
+					reporter->Error("%s", msg);
+				}
+			}
+		};
 
-	delete inits;
+
+	if ( zeek::detail::call_stack.empty() )
+		{
+		// Shouldn't happen unless someone (mistakenly) calls builtin_error()
+		// from somewhere that's not even evaluating script-code.
+		emit(nullptr);
+		return;
+		}
+
+	auto last_call = zeek::detail::call_stack.back();
+
+	if ( zeek::detail::call_stack.size() < 2 )
+		{
+		// Don't need to check for wrapper function like "<module>::__<func>"
+		emit(last_call.call);
+		return;
+		}
+
+	auto starts_with_double_underscore = [](const std::string& name) -> bool
+		{ return name.size() > 2 && name[0] == '_' && name[1] == '_'; };
+	std::string last_func = last_call.func->Name();
+
+	auto pos = last_func.find_first_of("::");
+	std::string wrapper_func;
+
+	if ( pos == std::string::npos )
+		{
+		if ( ! starts_with_double_underscore(last_func) )
+			{
+			emit(last_call.call);
+			return;
+			}
+
+		wrapper_func = last_func.substr(2);
+		}
+	else
+		{
+		auto module_name = last_func.substr(0, pos);
+		auto func_name = last_func.substr(pos + 2);
+
+		if ( ! starts_with_double_underscore(func_name) )
+			{
+			emit(last_call.call);
+			return;
+			}
+
+		wrapper_func = module_name + "::" + func_name.substr(2);
+		}
+
+	auto parent_call = zeek::detail::call_stack[zeek::detail::call_stack.size() - 2];
+	auto parent_func = parent_call.func->Name();
+
+	if ( wrapper_func == parent_func )
+		emit(parent_call.call);
+	else
+		emit(last_call.call);
 	}
 
-BifReturnVal::BifReturnVal(std::nullptr_t) noexcept
-	{ }
+void emit_builtin_exception(const char* msg)
+	{
+	emit_builtin_error_common(msg, nullptr, true);
+	}
 
-BifReturnVal::BifReturnVal(Val* v) noexcept
-	: rval(AdoptRef{}, v)
-	{ }
+void emit_builtin_exception(const char* msg, const zeek::ValPtr& arg)
+	{
+	emit_builtin_error_common(msg, arg.get(), true);
+	}
+
+void emit_builtin_exception(const char* msg, Obj* arg)
+	{
+	emit_builtin_error_common(msg, arg, true);
+	}
+
+} // namespace detail
+
+
+void emit_builtin_error(const char* msg)
+	{
+	zeek::detail::emit_builtin_error_common(msg, nullptr, false);
+	}
+
+void emit_builtin_error(const char* msg, const zeek::ValPtr& arg)
+	{
+	zeek::detail::emit_builtin_error_common(msg, arg.get(), false);
+	}
+
+void emit_builtin_error(const char* msg, Obj* arg)
+	{
+	zeek::detail::emit_builtin_error_common(msg, arg, false);
+	}
+
+} // namespace zeek
+
+void builtin_error(const char* msg)
+	{
+	zeek::emit_builtin_error(msg);
+	}
+
+void builtin_error(const char* msg, const zeek::ValPtr& arg)
+	{
+	zeek::emit_builtin_error(msg, arg);
+	}
+
+void builtin_error(const char* msg, zeek::Obj* arg)
+	{
+	zeek::emit_builtin_error(msg, arg);
+	}
+
+#include "__all__.bif.cc" // Autogenerated for compiling in the bif_target() code.
+#include "__all__.bif.register.cc" // Autogenerated for compiling in the bif_target() code.
+
+void init_builtin_funcs()
+	{
+	ProcStats = zeek::id::find_type<zeek::RecordType>("ProcStats");
+	NetStats = zeek::id::find_type<zeek::RecordType>("NetStats");
+	MatcherStats = zeek::id::find_type<zeek::RecordType>("MatcherStats");
+	ConnStats = zeek::id::find_type<zeek::RecordType>("ConnStats");
+	ReassemblerStats = zeek::id::find_type<zeek::RecordType>("ReassemblerStats");
+	DNSStats = zeek::id::find_type<zeek::RecordType>("DNSStats");
+	GapStats = zeek::id::find_type<zeek::RecordType>("GapStats");
+	EventStats = zeek::id::find_type<zeek::RecordType>("EventStats");
+	TimerStats = zeek::id::find_type<zeek::RecordType>("TimerStats");
+	FileAnalysisStats = zeek::id::find_type<zeek::RecordType>("FileAnalysisStats");
+	ThreadStats = zeek::id::find_type<zeek::RecordType>("ThreadStats");
+	BrokerStats = zeek::id::find_type<zeek::RecordType>("BrokerStats");
+	ReporterStats = zeek::id::find_type<zeek::RecordType>("ReporterStats");
+
+	var_sizes = zeek::id::find_type("var_sizes")->AsTableType();
+
+#include "zeek.bif.func_init"
+#include "stats.bif.func_init"
+#include "reporter.bif.func_init"
+#include "strings.bif.func_init"
+#include "option.bif.func_init"
+#include "supervisor.bif.func_init"
+
+	zeek::detail::did_builtin_init = true;
+	}
+
+void init_builtin_funcs_subdirs()
+	{
+#include "__all__.bif.init.cc" // Autogenerated for compiling in the bif_target() code.
+	}

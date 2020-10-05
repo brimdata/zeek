@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "BroString.h" // for byte_vec
+#include "ZeekString.h" // for byte_vec
 #include "util.h" // for bro_int_t
 
 #include <set>
@@ -25,7 +25,9 @@ typedef enum {
 class BroFile;
 class IPAddr;
 class IPPrefix;
-class BroType;
+
+namespace zeek { class Type; }
+using BroType [[deprecated("Remove in v4.1. Use zeek::Type instead.")]] = zeek::Type;
 
 class ODesc {
 public:
@@ -91,7 +93,7 @@ public:
 	// Add s as a counted string.
 	void AddCS(const char* s);
 
-	void AddBytes(const BroString* s);
+	void AddBytes(const zeek::String* s);
 
 	void Add(const char* s1, const char* s2)
 		{ Add(s1); Add(s2); }
@@ -128,7 +130,7 @@ public:
 	const char* Description() const		{ return (const char*) base; }
 
 	const u_char* Bytes() const	{ return (const u_char *) base; }
-	byte_vec TakeBytes()
+	zeek::byte_vec TakeBytes()
 		{
 		const void* t = base;
 		base = nullptr;
@@ -137,7 +139,7 @@ public:
 		// Don't clear offset, as we want to still support
 		// subsequent calls to Len().
 
-		return byte_vec(t);
+		return zeek::byte_vec(t);
 		}
 
 	int Len() const		{ return offset; }
@@ -146,9 +148,9 @@ public:
 
 	// Used to determine recursive types. Records push their types on here;
 	// if the same type (by address) is re-encountered, processing aborts.
-	bool PushType(const BroType* type);
-	bool PopType(const BroType* type);
-	bool FindType(const BroType* type);
+	bool PushType(const zeek::Type* type);
+	bool PopType(const zeek::Type* type);
+	bool FindType(const zeek::Type* type);
 
 protected:
 	void Indent();
@@ -204,5 +206,5 @@ protected:
 	bool do_flush;
 	bool include_stats;
 
-	std::set<const BroType*> encountered_types;
+	std::set<const zeek::Type*> encountered_types;
 };

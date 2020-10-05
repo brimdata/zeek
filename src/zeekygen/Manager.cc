@@ -27,7 +27,7 @@ static void DbgAndWarn(const char* msg)
 	DBG_LOG(DBG_ZEEKYGEN, "%s", msg);
 	}
 
-static void WarnMissingScript(const char* type, const ID* id,
+static void WarnMissingScript(const char* type, const zeek::detail::ID* id,
                               const string& script)
 	{
 	if ( script == "<command line>" )
@@ -54,7 +54,7 @@ static string RemoveLeadingSpace(const string& s)
 // use for indexing.
 static string NormalizeScriptPath(const string& path)
 	{
-	if ( auto p = plugin_mgr->LookupPluginByPath(path) ) 
+	if ( auto p = plugin_mgr->LookupPluginByPath(path) )
 		{
 		auto rval = normalize_path(path);
 		auto prefix = SafeBasename(p->PluginDirectory()).result;
@@ -216,15 +216,16 @@ void Manager::ModuleUsage(const string& path, const string& module)
 	        module.c_str(), name.c_str());
 	}
 
-IdentifierInfo* Manager::CreateIdentifierInfo(IntrusivePtr<ID> id, ScriptInfo* script)
+IdentifierInfo* Manager::CreateIdentifierInfo(zeek::detail::IDPtr id, ScriptInfo* script)
 	{
-	auto prev = identifiers.GetInfo(id->Name());
-	IdentifierInfo* rval = prev ? prev : new IdentifierInfo(id, script);
+	const auto& id_name = id->Name();
+	auto prev = identifiers.GetInfo(id_name);
+	IdentifierInfo* rval = prev ? prev : new IdentifierInfo(std::move(id), script);
 
 	rval->AddComments(comment_buffer);
 	comment_buffer.clear();
 
-	comment_buffer_map_t::iterator it = comment_buffer_map.find(id->Name());
+	comment_buffer_map_t::iterator it = comment_buffer_map.find(id_name);
 
 	if ( it != comment_buffer_map.end() )
 		{
@@ -235,7 +236,7 @@ IdentifierInfo* Manager::CreateIdentifierInfo(IntrusivePtr<ID> id, ScriptInfo* s
 	if ( ! prev )
 		{
 		all_info.push_back(rval);
-		identifiers.map[id->Name()] = rval;
+		identifiers.map[id_name] = rval;
 		}
 
 	last_identifier_seen = rval;
@@ -246,12 +247,12 @@ IdentifierInfo* Manager::CreateIdentifierInfo(IntrusivePtr<ID> id, ScriptInfo* s
 	return rval;
 	}
 
-void Manager::StartType(IntrusivePtr<ID> id)
+void Manager::StartType(zeek::detail::IDPtr id)
 	{
 	if ( disabled )
 		return;
 
-	if ( id->GetLocationInfo() == &no_location )
+	if ( id->GetLocationInfo() == &zeek::detail::no_location )
 		{
 		DbgAndWarn(fmt("Can't generate zeekygen doumentation for %s, "
 		               "no location available", id->Name()));
@@ -267,17 +268,17 @@ void Manager::StartType(IntrusivePtr<ID> id)
 		return;
 		}
 
-	incomplete_type = CreateIdentifierInfo(id, script_info);
-	DBG_LOG(DBG_ZEEKYGEN, "Made IdentifierInfo (incomplete) %s, in %s",
+	DBG_LOG(DBG_ZEEKYGEN, "Making IdentifierInfo (incomplete) %s, in %s",
 	        id->Name(), script.c_str());
+	incomplete_type = CreateIdentifierInfo(std::move(id), script_info);
 	}
 
-static bool IsEnumType(ID* id)
+static bool IsEnumType(zeek::detail::ID* id)
 	{
-	return id->AsType() ? id->AsType()->Tag() == TYPE_ENUM : false;
+	return id->IsType() ? id->GetType()->Tag() == zeek::TYPE_ENUM : false;
 	}
 
-void Manager::Identifier(IntrusivePtr<ID> id)
+void Manager::Identifier(zeek::detail::IDPtr id)
 	{
 	if ( disabled )
 		return;
@@ -300,7 +301,7 @@ void Manager::Identifier(IntrusivePtr<ID> id)
 
 	if ( id_info )
 		{
-		if ( IsFunc(id_info->GetID()->Type()->Tag()) )
+		if ( zeek::IsFunc(id_info->GetID()->GetType()->Tag()) )
 			{
 			// Function may already been seen (declaration versus body).
 			id_info->AddComments(comment_buffer);
@@ -312,7 +313,7 @@ void Manager::Identifier(IntrusivePtr<ID> id)
 		return;
 		}
 
-	if ( id->GetLocationInfo() == &no_location )
+	if ( id->GetLocationInfo() == &zeek::detail::no_location )
 		{
 		// Internally-created identifier (e.g. file/proto analyzer enum tags).
 		// Handled specially since they don't have a script location.
@@ -331,13 +332,13 @@ void Manager::Identifier(IntrusivePtr<ID> id)
 		return;
 		}
 
-	CreateIdentifierInfo(id, script_info);
-	DBG_LOG(DBG_ZEEKYGEN, "Made IdentifierInfo %s, in script %s",
+	DBG_LOG(DBG_ZEEKYGEN, "Making IdentifierInfo %s, in script %s",
 	        id->Name(), script.c_str());
+	CreateIdentifierInfo(std::move(id), script_info);
 	}
 
-void Manager::RecordField(const ID* id, const TypeDecl* field,
-			  const string& path)
+void Manager::RecordField(const zeek::detail::ID* id, const zeek::TypeDecl* field,
+                          const string& path)
 	{
 	if ( disabled )
 		return;
@@ -359,8 +360,9 @@ void Manager::RecordField(const ID* id, const TypeDecl* field,
 	        field->id, id->Name(), script.c_str());
 	}
 
-void Manager::Redef(const ID* id, const string& path,
-                    init_class ic, IntrusivePtr<Expr> init_expr)
+void Manager::Redef(const zeek::detail::ID* id, const string& path,
+                    zeek::detail::InitClass ic,
+                    zeek::detail::ExprPtr init_expr)
 	{
 	if ( disabled )
 		return;
@@ -396,8 +398,8 @@ void Manager::Redef(const ID* id, const string& path,
 	        id->Name(), from_script.c_str());
 	}
 
-void Manager::Redef(const ID* id, const std::string& path,
-                    init_class ic)
+void Manager::Redef(const zeek::detail::ID* id, const std::string& path,
+                    zeek::detail::InitClass ic)
 	{
 	Redef(id, path, ic, nullptr);
 	}

@@ -25,12 +25,12 @@
 			if ( v2 == 0 && server_random.length() >= 4 )
 				ts = ntohl(*((uint32*)server_random.data()));
 
-			BifEvent::enqueue_ssl_server_hello(bro_analyzer(),
+			zeek::BifEvent::enqueue_ssl_server_hello(bro_analyzer(),
 							bro_analyzer()->Conn(),
 							version, record_version(), ts,
-							make_intrusive<StringVal>(server_random.length(),
-							                          (const char*) server_random.data()),
-							{AdoptRef{}, to_string_val(session_id)},
+							zeek::make_intrusive<zeek::StringVal>(server_random.length(),
+							                                      (const char*) server_random.data()),
+							{zeek::AdoptRef{}, to_string_val(session_id)},
 							ciphers->size()==0 ? 0 : ciphers->at(0), comp_method);
 
 			delete ciphers;
@@ -38,4 +38,3 @@
 
 		return true;
 		%}
-

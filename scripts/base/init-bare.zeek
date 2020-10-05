@@ -188,6 +188,19 @@ type icmp_conn: record {
 	v6: bool;	##< True if it's an ICMPv6 packet.
 };
 
+## Specifics about an ICMP conversation/packet.
+## ICMP events typically pass this in addition to :zeek:type:`conn_id`.
+##
+## .. zeek:see:: icmp_echo_reply icmp_echo_request icmp_redirect icmp_sent
+##    icmp_time_exceeded icmp_unreachable
+type icmp_info: record {
+	v6: bool;      ##< True if it's an ICMPv6 packet.
+	itype: count;  ##< The ICMP type of the current packet.
+	icode: count;  ##< The ICMP code of the current packet.
+	len: count;    ##< The length of the ICMP payload.
+	ttl: count;    ##< The encapsulating IP header's TTL (IPv4) or Hop Limit (IPv6).
+};
+
 ## Packet context part of an ICMP message. The fields of this record reflect the
 ## packet that is described by the context.
 ##
@@ -734,6 +747,7 @@ type script_id: record {
 	enum_constant: bool;	##< True if the identifier is an enum value.
 	option_value: bool;	##< True if the identifier is an option.
 	redefinable: bool;	##< True if the identifier is declared with the :zeek:attr:`&redef` attribute.
+	broker_backend: bool;	##< True if the identifier has a Broker backend defined using the :zeek:attr:`&backend` attribute.
 	value: any &optional;	##< The current value of the identifier.
 };
 
@@ -771,7 +785,7 @@ type record_field_table: table[string] of record_field;
 
 ## Meta-information about a parameter to a function/event.
 ##
-## .. zeek:see:: call_argument_vector new_event
+## .. zeek:see:: call_argument_vector new_event backtrace print_backtrace
 type call_argument: record {
 	name: string;	##< The name of the parameter.
 	type_name: string;	##< The name of the parameters's type.
@@ -785,8 +799,27 @@ type call_argument: record {
 
 ## Vector type used to capture parameters of a function/event call.
 ##
-## .. zeek:see:: call_argument new_event
+## .. zeek:see:: call_argument new_event backtrace print_backtrace
 type call_argument_vector: vector of call_argument;
+
+## A representation of an element in a Zeek script's call stack.
+##
+## .. zeek:see:: backtrace print_backtrace
+type BacktraceElement: record {
+	## The name of the function being called at this point in the call stack.
+	function_name: string;
+	## The arguments passed to the function being called.
+	function_args: call_argument_vector;
+	## The file in which the function call is being made.
+	file_location: string &optional;
+	## The line number at which the function call is being made.
+	line_location: count &optional;
+};
+
+## A representation of a Zeek script's call stack.
+##
+## .. zeek:see:: backtrace print_backtrace
+type Backtrace: vector of BacktraceElement;
 
 # todo:: Do we still need these here? Can they move into the packet filter
 # framework?
@@ -1869,9 +1902,6 @@ type gtp_delete_pdp_ctx_response_elements: record {
 @load base/bif/option.bif
 @load base/frameworks/supervisor/api
 @load base/bif/supervisor.bif
-
-global done_with_network = F;
-event net_done(t: time) { done_with_network = T; }
 
 ## Internal function.
 function add_interface(iold: string, inew: string): string
@@ -3660,6 +3690,16 @@ type dns_edns_additional: record {
 	is_query: count;	##< TODO.
 };
 
+## An DNS EDNS Client Subnet (ECS) record.
+##
+## .. zeek:see:: dns_EDNS_ecs
+type dns_edns_ecs: record {
+	family: string;	##< IP Family
+	source_prefix_len: count;	##< Source Prefix Length.
+	scope_prefix_len: count;	##< Scope Prefix Length.
+	address: string;	##< Client Subnet Address.
+};
+
 ## An additional DNS TSIG record.
 ##
 ## .. zeek:see:: dns_TSIG_addl
@@ -5272,3 +5312,6 @@ const bits_per_uid: count = 96 &redef;
 ## to generate installation-unique file IDs (the *id* field of :zeek:see:`fa_file`).
 const digest_salt = "Please change this value." &redef;
 
+global done_with_network = F;
+event net_done(t: time)
+	{ done_with_network = T; }

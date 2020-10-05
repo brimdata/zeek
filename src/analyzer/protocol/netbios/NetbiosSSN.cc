@@ -5,7 +5,7 @@
 
 #include <ctype.h>
 
-#include "BroString.h"
+#include "ZeekString.h"
 #include "NetVar.h"
 #include "Sessions.h"
 #include "Event.h"
@@ -61,9 +61,9 @@ void NetbiosSSN_Interpreter::ParseMessage(unsigned int type, unsigned int flags,
 	if ( netbios_session_message )
 		analyzer->EnqueueConnEvent(netbios_session_message,
 			analyzer->ConnVal(),
-			val_mgr->Bool(is_query),
-			val_mgr->Count(type),
-			val_mgr->Count(len)
+			zeek::val_mgr->Bool(is_query),
+			zeek::val_mgr->Count(type),
+			zeek::val_mgr->Count(len)
 		);
 
 	switch ( type ) {
@@ -125,11 +125,11 @@ void NetbiosSSN_Interpreter::ParseBroadcast(const u_char* data, int len,
 	// FIND THE NUL-TERMINATED NAME STRINGS HERE!
 	// Not sure what's in them, so we don't keep them currently.
 
-	BroString* srcname = new BroString((char*) data);
+	zeek::String* srcname = new zeek::String((char*) data);
 	data += srcname->Len()+1;
 	len -= srcname->Len();
 
-	BroString* dstname = new BroString((char*) data);
+	zeek::String* dstname = new zeek::String((char*) data);
 	data += dstname->Len()+1;
 	len -= dstname->Len();
 
@@ -322,15 +322,13 @@ void NetbiosSSN_Interpreter::Event(EventHandlerPtr event, const u_char* data,
 
 	if ( is_orig >= 0 )
 		analyzer->EnqueueConnEvent(event,
-			analyzer->ConnVal(),
-			val_mgr->Bool(is_orig),
-			make_intrusive<StringVal>(new BroString(data, len, false))
-		);
+		                           analyzer->ConnVal(),
+		                           zeek::val_mgr->Bool(is_orig),
+		                           zeek::make_intrusive<zeek::StringVal>(new zeek::String(data, len, false)));
 	else
 		analyzer->EnqueueConnEvent(event,
-			analyzer->ConnVal(),
-			make_intrusive<StringVal>(new BroString(data, len, false))
-		);
+		                           analyzer->ConnVal(),
+		                           zeek::make_intrusive<zeek::StringVal>(new zeek::String(data, len, false)));
 	}
 
 
@@ -360,6 +358,12 @@ void Contents_NetbiosSSN::Flush()
 	}
 
 void Contents_NetbiosSSN::DeliverStream(int len, const u_char* data, bool orig)
+	{
+	while ( len > 0 )
+		ProcessChunk(len, data, orig);
+	}
+
+void Contents_NetbiosSSN::ProcessChunk(int& len, const u_char*& data, bool orig)
 	{
 	tcp::TCP_SupportAnalyzer::DeliverStream(len, data, orig);
 
@@ -436,6 +440,9 @@ void Contents_NetbiosSSN::DeliverStream(int len, const u_char* data, bool orig)
 	for ( n = 0; buf_n < msg_size && n < len; ++n )
 		msg_buf[buf_n++] = data[n];
 
+	data += n;
+	len -= n;
+
 	if ( buf_n < msg_size )
 		// Haven't filled up the message buffer yet, no more to do.
 		return;
@@ -444,10 +451,6 @@ void Contents_NetbiosSSN::DeliverStream(int len, const u_char* data, bool orig)
 	buf_n = 0;
 
 	state = NETBIOS_SSN_TYPE;
-
-	if ( n < len )
-		// More data to munch on.
-		DeliverStream(len - n, data + n, orig);
 	}
 
 NetbiosSSN_Analyzer::NetbiosSSN_Analyzer(Connection* conn)

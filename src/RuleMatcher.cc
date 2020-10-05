@@ -7,7 +7,7 @@
 
 #include "RuleAction.h"
 #include "RuleCondition.h"
-#include "BroString.h"
+#include "ZeekString.h"
 #include "ID.h"
 #include "IntrusivePtr.h"
 #include "IntSet.h"
@@ -20,6 +20,8 @@
 #include "File.h"
 #include "Reporter.h"
 #include "module_util.h"
+#include "Var.h"
+#include "IPAddr.h"
 
 using namespace std;
 
@@ -76,14 +78,15 @@ RuleHdrTest::RuleHdrTest(Prot arg_prot, Comp arg_comp, vector<IPPrefix> arg_v)
 	level = 0;
 	}
 
-Val* RuleMatcher::BuildRuleStateValue(const Rule* rule,
-					const RuleEndpointState* state) const
+zeek::Val* RuleMatcher::BuildRuleStateValue(const Rule* rule,
+                                            const RuleEndpointState* state) const
 	{
-	RecordVal* val = new RecordVal(signature_state);
-	val->Assign(0, make_intrusive<StringVal>(rule->ID()));
+	static auto signature_state = zeek::id::find_type<zeek::RecordType>("signature_state");
+	auto* val = new zeek::RecordVal(signature_state);
+	val->Assign(0, zeek::make_intrusive<zeek::StringVal>(rule->ID()));
 	val->Assign(1, state->GetAnalyzer()->ConnVal());
-	val->Assign(2, val_mgr->Bool(state->is_orig));
-	val->Assign(3, val_mgr->Count(state->payload_size));
+	val->Assign(2, zeek::val_mgr->Bool(state->is_orig));
+	val->Assign(3, zeek::val_mgr->Count(state->payload_size));
 	return val;
 	}
 
@@ -955,7 +958,7 @@ void RuleMatcher::Match(RuleEndpointState* state, Rule::PatternType type,
 			if ( ! state->matched_by_patterns.is_member(r) )
 				{
 				state->matched_by_patterns.push_back(r);
-				BroString* s = new BroString(data, data_len, false);
+				zeek::String* s = new zeek::String(data, data_len, false);
 				state->matched_text.push_back(s);
 				}
 
@@ -995,7 +998,7 @@ void RuleMatcher::ExecPureRules(RuleEndpointState* state, bool eos)
 		}
 	}
 
-bool RuleMatcher::ExecRulePurely(Rule* r, BroString* s,
+bool RuleMatcher::ExecRulePurely(Rule* r, zeek::String* s,
 				 RuleEndpointState* state, bool eos)
 	{
 	if ( is_member_of(state->matched_rules, r->Index()) )
@@ -1269,42 +1272,42 @@ void RuleMatcher::DumpStateStats(BroFile* f, RuleHdrTest* hdr_test)
 		DumpStateStats(f, h);
 	}
 
-static Val* get_bro_val(const char* label)
+static zeek::Val* get_bro_val(const char* label)
 	{
-	auto id = lookup_ID(label, GLOBAL_MODULE_NAME, false);
+	auto id = zeek::detail::lookup_ID(label, GLOBAL_MODULE_NAME, false);
 	if ( ! id )
 		{
 		rules_error("unknown script-level identifier", label);
 		return nullptr;
 		}
 
-	return id->ID_Val();
+	return id->GetVal().get();
 	}
 
 
 // Converts an atomic Val and appends it to the list.  For subnet types,
 // if the prefix_vector param isn't null, appending to that is preferred
 // over appending to the masked val list.
-static bool val_to_maskedval(Val* v, maskedvalue_list* append_to,
+static bool val_to_maskedval(zeek::Val* v, maskedvalue_list* append_to,
                              vector<IPPrefix>* prefix_vector)
 	{
 	MaskedValue* mval = new MaskedValue;
 
-	switch ( v->Type()->Tag() ) {
-		case TYPE_PORT:
+	switch ( v->GetType()->Tag() ) {
+		case zeek::TYPE_PORT:
 			mval->val = v->AsPortVal()->Port();
 			mval->mask = 0xffffffff;
 			break;
 
-		case TYPE_BOOL:
-		case TYPE_COUNT:
-		case TYPE_ENUM:
-		case TYPE_INT:
+		case zeek::TYPE_BOOL:
+		case zeek::TYPE_COUNT:
+		case zeek::TYPE_ENUM:
+		case zeek::TYPE_INT:
 			mval->val = v->CoerceToUnsigned();
 			mval->mask = 0xffffffff;
 			break;
 
-		case TYPE_SUBNET:
+		case zeek::TYPE_SUBNET:
 			{
 			if ( prefix_vector )
 				{
@@ -1355,22 +1358,17 @@ static bool val_to_maskedval(Val* v, maskedvalue_list* append_to,
 void id_to_maskedvallist(const char* id, maskedvalue_list* append_to,
                          vector<IPPrefix>* prefix_vector)
 	{
-	Val* v = get_bro_val(id);
+	zeek::Val* v = get_bro_val(id);
 	if ( ! v )
 		return;
 
-	if ( v->Type()->Tag() == TYPE_TABLE )
+	if ( v->GetType()->Tag() == zeek::TYPE_TABLE )
 		{
-		ListVal* lv = v->AsTableVal()->ConvertToPureList();
-		val_list* vals = lv->Vals();
-		for ( const auto& val : *vals )
-			if ( ! val_to_maskedval(val, append_to, prefix_vector) )
-				{
-				Unref(lv);
-				return;
-				}
+		auto lv = v->AsTableVal()->ToPureListVal();
 
-		Unref(lv);
+		for ( const auto& val : lv->Vals() )
+			if ( ! val_to_maskedval(val.get(), append_to, prefix_vector) )
+				return;
 		}
 
 	else
@@ -1379,14 +1377,14 @@ void id_to_maskedvallist(const char* id, maskedvalue_list* append_to,
 
 char* id_to_str(const char* id)
 	{
-	const BroString* src;
+	const zeek::String* src;
 	char* dst;
 
-	Val* v = get_bro_val(id);
+	zeek::Val* v = get_bro_val(id);
 	if ( ! v )
 		goto error;
 
-	if ( v->Type()->Tag() != TYPE_STRING )
+	if ( v->GetType()->Tag() != zeek::TYPE_STRING )
 		{
 		rules_error("Identifier must refer to string");
 		goto error;
@@ -1405,14 +1403,14 @@ error:
 
 uint32_t id_to_uint(const char* id)
 	{
-	Val* v = get_bro_val(id);
+	zeek::Val* v = get_bro_val(id);
 	if ( ! v )
 		return 0;
 
-	TypeTag t = v->Type()->Tag();
+	zeek::TypeTag t = v->GetType()->Tag();
 
-	if ( t == TYPE_BOOL || t == TYPE_COUNT || t == TYPE_ENUM ||
-	     t == TYPE_INT || t == TYPE_PORT )
+	if ( t == zeek::TYPE_BOOL || t == zeek::TYPE_COUNT || t == zeek::TYPE_ENUM ||
+	     t == zeek::TYPE_INT || t == zeek::TYPE_PORT )
 		return v->CoerceToUnsigned();
 
 	rules_error("Identifier must refer to integer");

@@ -3,13 +3,13 @@
 %}
 
 %header{
-	IntrusivePtr<RecordVal> SMBHeaderVal(SMB_Header* hdr);
+	zeek::RecordValPtr SMBHeaderVal(SMB_Header* hdr);
 %}
 
 %code{
-	IntrusivePtr<RecordVal> SMBHeaderVal(SMB_Header* hdr)
+	zeek::RecordValPtr SMBHeaderVal(SMB_Header* hdr)
 		{
-		auto r = make_intrusive<RecordVal>(BifType::Record::SMB1::Header);
+		auto r = zeek::make_intrusive<zeek::RecordVal>(zeek::BifType::Record::SMB1::Header);
 
 		//unsigned int status = 0;
 		//
@@ -25,14 +25,14 @@
 		//	{ // do nothing
 		//	}
 
-		r->Assign(0, val_mgr->Count(${hdr.command}));
-		r->Assign(1, val_mgr->Count(${hdr.status}));
-		r->Assign(2, val_mgr->Count(${hdr.flags}));
-		r->Assign(3, val_mgr->Count(${hdr.flags2}));
-		r->Assign(4, val_mgr->Count(${hdr.tid}));
-		r->Assign(5, val_mgr->Count(${hdr.pid}));
-		r->Assign(6, val_mgr->Count(${hdr.uid}));
-		r->Assign(7, val_mgr->Count(${hdr.mid}));
+		r->Assign(0, zeek::val_mgr->Count(${hdr.command}));
+		r->Assign(1, zeek::val_mgr->Count(${hdr.status}));
+		r->Assign(2, zeek::val_mgr->Count(${hdr.flags}));
+		r->Assign(3, zeek::val_mgr->Count(${hdr.flags2}));
+		r->Assign(4, zeek::val_mgr->Count(${hdr.tid}));
+		r->Assign(5, zeek::val_mgr->Count(${hdr.pid}));
+		r->Assign(6, zeek::val_mgr->Count(${hdr.uid}));
+		r->Assign(7, zeek::val_mgr->Count(${hdr.mid}));
 
 		return r;
 		}
@@ -43,7 +43,7 @@ refine connection SMB_Conn += {
 		%{
 		if ( smb1_message )
 			{
-			BifEvent::enqueue_smb1_message(bro_analyzer(), bro_analyzer()->Conn(),
+			zeek::BifEvent::enqueue_smb1_message(bro_analyzer(), bro_analyzer()->Conn(),
 			                                SMBHeaderVal(h),
 			                                is_orig);
 			}
@@ -54,7 +54,7 @@ refine connection SMB_Conn += {
 		%{
 		if ( smb1_empty_response )
 			{
-			BifEvent::enqueue_smb1_empty_response(bro_analyzer(),
+			zeek::BifEvent::enqueue_smb1_empty_response(bro_analyzer(),
 			                                      bro_analyzer()->Conn(),
 			                                      SMBHeaderVal(header));
 			}
@@ -67,7 +67,7 @@ refine connection SMB_Conn += {
 			{
 			if ( smb1_empty_response )
 				{
-				BifEvent::enqueue_smb1_empty_response(bro_analyzer(),
+				zeek::BifEvent::enqueue_smb1_empty_response(bro_analyzer(),
 				                                      bro_analyzer()->Conn(),
 				                                      SMBHeaderVal(h));
 				}
@@ -75,7 +75,7 @@ refine connection SMB_Conn += {
 		else
 			{
 			if ( smb1_error )
-				BifEvent::enqueue_smb1_error(bro_analyzer(),
+				zeek::BifEvent::enqueue_smb1_error(bro_analyzer(),
 				                             bro_analyzer()->Conn(),
 				                             SMBHeaderVal(h), is_orig);
 			}

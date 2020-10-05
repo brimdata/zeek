@@ -31,12 +31,13 @@
 
 #include <algorithm>
 
-#include "BroString.h"
+#include "ZeekString.h"
 #include "Expr.h"
 #include "Event.h"
 #include "Net.h"
 #include "Val.h"
-#include "Var.h"
+#include "NetVar.h"
+#include "ID.h"
 #include "Reporter.h"
 #include "IntrusivePtr.h"
 #include "iosource/Manager.h"
@@ -121,9 +122,9 @@ public:
 		return req_host ? req_host : req_addr.AsString();
 		}
 
-	IntrusivePtr<ListVal> Addrs();
-	IntrusivePtr<TableVal> AddrsSet();	// addresses returned as a set
-	IntrusivePtr<StringVal> Host();
+	zeek::ListValPtr Addrs();
+	zeek::TableValPtr AddrsSet();	// addresses returned as a set
+	zeek::StringValPtr Host();
 
 	double CreationTime() const	{ return creation_time; }
 
@@ -154,11 +155,11 @@ protected:
 
 	int num_names;
 	char** names;
-	IntrusivePtr<StringVal> host_val;
+	zeek::StringValPtr host_val;
 
 	int num_addrs;
 	IPAddr* addrs;
-	IntrusivePtr<ListVal> addrs_val;
+	zeek::ListValPtr addrs_val;
 
 	double creation_time;
 	int map_type;
@@ -172,13 +173,13 @@ void DNS_Mgr_mapping_delete_func(void* v)
 	delete (DNS_Mapping*) v;
 	}
 
-static IntrusivePtr<TableVal> empty_addr_set()
+static zeek::TableValPtr empty_addr_set()
 	{
-	auto addr_t = base_type(TYPE_ADDR);
-	auto set_index = make_intrusive<TypeList>(addr_t);
+	auto addr_t = zeek::base_type(zeek::TYPE_ADDR);
+	auto set_index = zeek::make_intrusive<zeek::TypeList>(addr_t);
 	set_index->Append(std::move(addr_t));
-	auto s = make_intrusive<SetType>(std::move(set_index), nullptr);
-	return make_intrusive<TableVal>(std::move(s));
+	auto s = zeek::make_intrusive<zeek::SetType>(std::move(set_index), nullptr);
+	return zeek::make_intrusive<zeek::TableVal>(std::move(s));
 	}
 
 DNS_Mapping::DNS_Mapping(const char* host, struct hostent* h, uint32_t ttl)
@@ -275,38 +276,38 @@ DNS_Mapping::~DNS_Mapping()
 	delete [] addrs;
 	}
 
-IntrusivePtr<ListVal> DNS_Mapping::Addrs()
+zeek::ListValPtr DNS_Mapping::Addrs()
 	{
 	if ( failed )
 		return nullptr;
 
 	if ( ! addrs_val )
 		{
-		auto addrs_val = make_intrusive<ListVal>(TYPE_ADDR);
+		addrs_val = zeek::make_intrusive<zeek::ListVal>(zeek::TYPE_ADDR);
 
 		for ( int i = 0; i < num_addrs; ++i )
-			addrs_val->Append(new AddrVal(addrs[i]));
+			addrs_val->Append(zeek::make_intrusive<zeek::AddrVal>(addrs[i]));
 		}
 
 	return addrs_val;
 	}
 
-IntrusivePtr<TableVal> DNS_Mapping::AddrsSet() {
+zeek::TableValPtr DNS_Mapping::AddrsSet() {
 	auto l = Addrs();
 
 	if ( ! l )
 		return empty_addr_set();
 
-	return {AdoptRef{}, l->ConvertToSet()};
+	return l->ToSetVal();
 	}
 
-IntrusivePtr<StringVal> DNS_Mapping::Host()
+zeek::StringValPtr DNS_Mapping::Host()
 	{
 	if ( failed || num_names == 0 || ! names[0] )
 		return nullptr;
 
 	if ( ! host_val )
-		host_val = make_intrusive<StringVal>(names[0]);
+		host_val = zeek::make_intrusive<zeek::StringVal>(names[0]);
 
 	return host_val;
 	}
@@ -380,12 +381,6 @@ DNS_Mgr::DNS_Mgr(DNS_MgrMode arg_mode)
 
 	mode = arg_mode;
 
-	dns_mapping_valid = dns_mapping_unverified = dns_mapping_new_name =
-		dns_mapping_lost_name = dns_mapping_name_changed =
-			dns_mapping_altered =  nullptr;
-
-	dm_rec = nullptr;
-
 	cache_name = dir = nullptr;
 
 	asyncs_pending = 0;
@@ -455,14 +450,7 @@ void DNS_Mgr::InitSource()
 
 void DNS_Mgr::InitPostScript()
 	{
-	dns_mapping_valid = internal_handler("dns_mapping_valid");
-	dns_mapping_unverified = internal_handler("dns_mapping_unverified");
-	dns_mapping_new_name = internal_handler("dns_mapping_new_name");
-	dns_mapping_lost_name = internal_handler("dns_mapping_lost_name");
-	dns_mapping_name_changed = internal_handler("dns_mapping_name_changed");
-	dns_mapping_altered = internal_handler("dns_mapping_altered");
-
-	dm_rec = internal_type("dns_mapping")->AsRecordType();
+	dm_rec = zeek::id::find_type<zeek::RecordType>("dns_mapping");
 
 	// Registering will call Init()
 	iosource_mgr->Register(this, true);
@@ -473,13 +461,13 @@ void DNS_Mgr::InitPostScript()
 	LoadCache(fopen(cache_name, "r"));
 	}
 
-static IntrusivePtr<TableVal> fake_name_lookup_result(const char* name)
+static zeek::TableValPtr fake_name_lookup_result(const char* name)
 	{
 	hash128_t hash;
 	KeyedHash::StaticHash128(name, strlen(name), &hash);
-	auto hv = make_intrusive<ListVal>(TYPE_ADDR);
-	hv->Append(new AddrVal(reinterpret_cast<const uint32_t*>(&hash)));
-	return {AdoptRef{}, hv->ConvertToSet()};
+	auto hv = zeek::make_intrusive<zeek::ListVal>(zeek::TYPE_ADDR);
+	hv->Append(zeek::make_intrusive<zeek::AddrVal>(reinterpret_cast<const uint32_t*>(&hash)));
+	return hv->ToSetVal();
 	}
 
 static const char* fake_text_lookup_result(const char* name)
@@ -497,7 +485,7 @@ static const char* fake_addr_lookup_result(const IPAddr& addr)
 	return tmp;
 	}
 
-IntrusivePtr<TableVal> DNS_Mgr::LookupHost(const char* name)
+zeek::TableValPtr DNS_Mgr::LookupHost(const char* name)
 	{
 	if ( mode == DNS_FAKE )
 		return fake_name_lookup_result(name);
@@ -554,7 +542,7 @@ IntrusivePtr<TableVal> DNS_Mgr::LookupHost(const char* name)
 	}
 	}
 
-IntrusivePtr<Val> DNS_Mgr::LookupAddr(const IPAddr& addr)
+zeek::ValPtr DNS_Mgr::LookupAddr(const IPAddr& addr)
 	{
 	InitSource();
 
@@ -571,7 +559,7 @@ IntrusivePtr<Val> DNS_Mgr::LookupAddr(const IPAddr& addr)
 				{
 				string s(addr);
 				reporter->Warning("can't resolve IP address: %s", s.c_str());
-				return make_intrusive<StringVal>(s.c_str());
+				return zeek::make_intrusive<zeek::StringVal>(s.c_str());
 				}
 			}
 		}
@@ -580,7 +568,7 @@ IntrusivePtr<Val> DNS_Mgr::LookupAddr(const IPAddr& addr)
 	switch ( mode ) {
 	case DNS_PRIME:
 		requests.push_back(new DNS_Mgr_Request(addr));
-		return make_intrusive<StringVal>("<none>");
+		return zeek::make_intrusive<zeek::StringVal>("<none>");
 
 	case DNS_FORCE:
 		reporter->FatalError("can't find DNS entry for %s in cache",
@@ -710,16 +698,12 @@ void DNS_Mgr::Event(EventHandlerPtr e, DNS_Mapping* dm)
 	}
 
 void DNS_Mgr::Event(EventHandlerPtr e, DNS_Mapping* dm,
-					IntrusivePtr<ListVal> l1, IntrusivePtr<ListVal> l2)
+					zeek::ListValPtr l1, zeek::ListValPtr l2)
 	{
 	if ( ! e )
 		return;
 
-	mgr.Enqueue(e,
-		BuildMappingVal(dm),
-		IntrusivePtr{AdoptRef{}, l1->ConvertToSet()},
-		IntrusivePtr{AdoptRef{}, l2->ConvertToSet()}
-	);
+	mgr.Enqueue(e, BuildMappingVal(dm), l1->ToSetVal(), l2->ToSetVal());
 	}
 
 void DNS_Mgr::Event(EventHandlerPtr e, DNS_Mapping* old_dm, DNS_Mapping* new_dm)
@@ -730,17 +714,17 @@ void DNS_Mgr::Event(EventHandlerPtr e, DNS_Mapping* old_dm, DNS_Mapping* new_dm)
 	mgr.Enqueue(e, BuildMappingVal(old_dm), BuildMappingVal(new_dm));
 	}
 
-IntrusivePtr<Val> DNS_Mgr::BuildMappingVal(DNS_Mapping* dm)
+zeek::ValPtr DNS_Mgr::BuildMappingVal(DNS_Mapping* dm)
 	{
-	auto r = make_intrusive<RecordVal>(dm_rec);
+	auto r = zeek::make_intrusive<zeek::RecordVal>(dm_rec);
 
-	r->Assign(0, make_intrusive<Val>(dm->CreationTime(), TYPE_TIME));
-	r->Assign(1, make_intrusive<StringVal>(dm->ReqHost() ? dm->ReqHost() : ""));
-	r->Assign(2, make_intrusive<AddrVal>(dm->ReqAddr()));
-	r->Assign(3, val_mgr->Bool(dm->Valid()));
+	r->Assign(0, zeek::make_intrusive<zeek::TimeVal>(dm->CreationTime()));
+	r->Assign(1, zeek::make_intrusive<zeek::StringVal>(dm->ReqHost() ? dm->ReqHost() : ""));
+	r->Assign(2, zeek::make_intrusive<zeek::AddrVal>(dm->ReqAddr()));
+	r->Assign(3, zeek::val_mgr->Bool(dm->Valid()));
 
 	auto h = dm->Host();
-	r->Assign(4, h ? h.release() : new StringVal("<none>"));
+	r->Assign(4, h ? std::move(h) : zeek::make_intrusive<zeek::StringVal>("<none>"));
 	r->Assign(5, dm->AddrsSet());
 
 	return r;
@@ -886,35 +870,35 @@ void DNS_Mgr::CompareMappings(DNS_Mapping* prev_dm, DNS_Mapping* new_dm)
 		Event(dns_mapping_altered, new_dm, std::move(prev_delta), std::move(new_delta));
 	}
 
-IntrusivePtr<ListVal> DNS_Mgr::AddrListDelta(ListVal* al1, ListVal* al2)
+zeek::ListValPtr DNS_Mgr::AddrListDelta(zeek::ListVal* al1, zeek::ListVal* al2)
 	{
-	auto delta = make_intrusive<ListVal>(TYPE_ADDR);
+	auto delta = zeek::make_intrusive<zeek::ListVal>(zeek::TYPE_ADDR);
 
 	for ( int i = 0; i < al1->Length(); ++i )
 		{
-		const IPAddr& al1_i = al1->Index(i)->AsAddr();
+		const IPAddr& al1_i = al1->Idx(i)->AsAddr();
 
 		int j;
 		for ( j = 0; j < al2->Length(); ++j )
 			{
-			const IPAddr& al2_j = al2->Index(j)->AsAddr();
+			const IPAddr& al2_j = al2->Idx(j)->AsAddr();
 			if ( al1_i == al2_j )
 				break;
 			}
 
 		if ( j >= al2->Length() )
 			// Didn't find it.
-			delta->Append(al1->Index(i)->Ref());
+			delta->Append(al1->Idx(i));
 		}
 
 	return delta;
 	}
 
-void DNS_Mgr::DumpAddrList(FILE* f, ListVal* al)
+void DNS_Mgr::DumpAddrList(FILE* f, zeek::ListVal* al)
 	{
 	for ( int i = 0; i < al->Length(); ++i )
 		{
-		const IPAddr& al_i = al->Index(i)->AsAddr();
+		const IPAddr& al_i = al->Idx(i)->AsAddr();
 		fprintf(f, "%s%s", i > 0 ? "," : "", al_i.AsString().c_str());
 		}
 	}
@@ -996,7 +980,7 @@ const char* DNS_Mgr::LookupAddrInCache(const IPAddr& addr)
 	return d->names ? d->names[0] : "<\?\?\?>";
 	}
 
-IntrusivePtr<TableVal> DNS_Mgr::LookupNameInCache(const string& name)
+zeek::TableValPtr DNS_Mgr::LookupNameInCache(const string& name)
 	{
 	HostMap::iterator it = host_mappings.find(name);
 	if ( it == host_mappings.end() )
@@ -1046,7 +1030,7 @@ const char* DNS_Mgr::LookupTextInCache(const string& name)
 	}
 
 static void resolve_lookup_cb(DNS_Mgr::LookupCallback* callback,
-                              IntrusivePtr<TableVal> result)
+                              zeek::TableValPtr result)
 	{
 	callback->Resolved(result.get());
 	delete callback;

@@ -26,7 +26,7 @@ while (0)
 
 #endif
 
-using namespace bro;
+using namespace zeek::detail;
 
 Flare::Flare()
 #ifndef __MINGW32__

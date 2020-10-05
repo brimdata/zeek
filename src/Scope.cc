@@ -10,63 +10,67 @@
 #include "Reporter.h"
 #include "module_util.h"
 
-typedef PList<Scope> scope_list;
+namespace zeek::detail {
+
+using scope_list = zeek::PList<Scope>;
 
 static scope_list scopes;
 static Scope* top_scope;
 
-
-Scope::Scope(IntrusivePtr<ID> id, attr_list* al)
-	: scope_id(std::move(id))
+Scope::Scope(zeek::detail::IDPtr id,
+             std::unique_ptr<std::vector<zeek::detail::AttrPtr>> al)
+	: scope_id(std::move(id)), attrs(std::move(al))
 	{
-	attrs = al;
 	return_type = nullptr;
-
-	inits = new id_list;
 
 	if ( id )
 		{
-		BroType* id_type = scope_id->Type();
+		const auto& id_type = scope_id->GetType();
 
-		if ( id_type->Tag() == TYPE_ERROR )
+		if ( id_type->Tag() == zeek::TYPE_ERROR )
 			return;
-		else if ( id_type->Tag() != TYPE_FUNC )
+		else if ( id_type->Tag() != zeek::TYPE_FUNC )
 			reporter->InternalError("bad scope id");
 
-		FuncType* ft = id->Type()->AsFuncType();
-		return_type = {NewRef{}, ft->YieldType()};
+		zeek::FuncType* ft = id->GetType()->AsFuncType();
+		return_type = ft->Yield();
 		}
 	}
 
-Scope::~Scope()
+const zeek::detail::IDPtr& Scope::Find(std::string_view name) const
 	{
-	if ( attrs )
+	auto entry = local.find(name);
+
+	if ( entry != local.end() )
+		return entry->second;
+
+	return zeek::detail::ID::nil;
+	}
+
+zeek::detail::IDPtr Scope::Remove(std::string_view name)
+	{
+	auto entry = local.find(name);
+
+	if ( entry != local.end() )
 		{
-		for ( const auto& attr : *attrs )
-			Unref(attr);
-
-		delete attrs;
+		auto id = std::move(entry->second);
+		local.erase(entry);
+		return id;
 		}
 
-	if ( inits )
-		{
-		for ( const auto& i : *inits )
-			Unref(i);
-
-		delete inits;
-		}
+	return nullptr;
 	}
 
-ID* Scope::GenerateTemporary(const char* name)
+zeek::detail::IDPtr Scope::GenerateTemporary(const char* name)
 	{
-	return new ID(name, SCOPE_FUNCTION, false);
+	return zeek::make_intrusive<zeek::detail::ID>(name, zeek::detail::SCOPE_FUNCTION, false);
 	}
 
-id_list* Scope::GetInits()
+std::vector<zeek::detail::IDPtr> Scope::GetInits()
 	{
-	id_list* ids = inits;
-	inits = nullptr;
-	return ids;
+	auto rval = std::move(inits);
+	inits = {};
+	return rval;
 	}
 
 void Scope::Describe(ODesc* d) const
@@ -98,7 +102,7 @@ void Scope::Describe(ODesc* d) const
 
 	for ( const auto& entry : local )
 		{
-		ID* id = entry.second.get();
+		zeek::detail::ID* id = entry.second.get();
 		id->Describe(d);
 		d->NL();
 		}
@@ -108,7 +112,7 @@ TraversalCode Scope::Traverse(TraversalCallback* cb) const
 	{
 	for ( const auto& entry : local )
 		{
-		ID* id = entry.second.get();
+		zeek::detail::ID* id = entry.second.get();
 		TraversalCode tc = id->Traverse(cb);
 		HANDLE_TC_STMT_PRE(tc);
 		}
@@ -117,9 +121,9 @@ TraversalCode Scope::Traverse(TraversalCallback* cb) const
 	}
 
 
-IntrusivePtr<ID> lookup_ID(const char* name, const char* curr_module,
-                           bool no_global, bool same_module_only,
-                           bool check_export)
+const zeek::detail::IDPtr& lookup_ID(const char* name, const char* curr_module,
+                                     bool no_global, bool same_module_only,
+                                     bool check_export)
 	{
 	std::string fullname = make_full_var_name(curr_module, name);
 
@@ -129,50 +133,49 @@ IntrusivePtr<ID> lookup_ID(const char* name, const char* curr_module,
 
 	for ( int i = scopes.length() - 1; i >= 0; --i )
 		{
-		ID* id = scopes[i]->Lookup(fullname);
+		const auto& id = scopes[i]->Find(fullname);
+
 		if ( id )
 			{
 			if ( need_export && ! id->IsExport() && ! in_debug )
 				reporter->Error("identifier is not exported: %s",
-				      fullname.c_str());
+				                fullname.c_str());
 
-			return {NewRef{}, id};
+			return id;
 			}
 		}
 
 	if ( ! no_global && (strcmp(GLOBAL_MODULE_NAME, curr_module) == 0 ||
-			     ! same_module_only) )
+	                     ! same_module_only) )
 		{
 		std::string globalname = make_full_var_name(GLOBAL_MODULE_NAME, name);
-		ID* id = global_scope()->Lookup(globalname);
-		if ( id )
-			return {NewRef{}, id};
+		return global_scope()->Find(globalname);
 		}
 
-	return nullptr;
+	return zeek::detail::ID::nil;
 	}
 
-IntrusivePtr<ID> install_ID(const char* name, const char* module_name,
-                            bool is_global, bool is_export)
+zeek::detail::IDPtr install_ID(const char* name, const char* module_name,
+                               bool is_global, bool is_export)
 	{
 	if ( scopes.empty() && ! is_global )
 		reporter->InternalError("local identifier in global scope");
 
-	IDScope scope;
+	zeek::detail::IDScope scope;
 	if ( is_export || ! module_name ||
 	     (is_global &&
 	      normalized_module_name(module_name) == GLOBAL_MODULE_NAME) )
-		scope = SCOPE_GLOBAL;
+		scope = zeek::detail::SCOPE_GLOBAL;
 	else if ( is_global )
-		scope = SCOPE_MODULE;
+		scope = zeek::detail::SCOPE_MODULE;
 	else
-		scope = SCOPE_FUNCTION;
+		scope = zeek::detail::SCOPE_FUNCTION;
 
 	std::string full_name = make_full_var_name(module_name, name);
 
-	auto id = make_intrusive<ID>(full_name.data(), scope, is_export);
+	auto id = zeek::make_intrusive<zeek::detail::ID>(full_name.data(), scope, is_export);
 
-	if ( SCOPE_FUNCTION != scope )
+	if ( zeek::detail::SCOPE_FUNCTION != scope )
 		global_scope()->Insert(std::move(full_name), id);
 	else
 		{
@@ -188,13 +191,14 @@ void push_existing_scope(Scope* scope)
 	scopes.push_back(scope);
 	}
 
-void push_scope(IntrusivePtr<ID> id, attr_list* attrs)
+void push_scope(zeek::detail::IDPtr id,
+                std::unique_ptr<std::vector<zeek::detail::AttrPtr>> attrs)
 	{
-	top_scope = new Scope(std::move(id), attrs);
+	top_scope = new Scope(std::move(id), std::move(attrs));
 	scopes.push_back(top_scope);
 	}
 
-IntrusivePtr<Scope> pop_scope()
+ScopePtr pop_scope()
 	{
 	if ( scopes.empty() )
 		reporter->InternalError("scope underflow");
@@ -204,7 +208,7 @@ IntrusivePtr<Scope> pop_scope()
 
 	top_scope = scopes.empty() ? nullptr : scopes.back();
 
-	return {AdoptRef{}, old_top};
+	return {zeek::AdoptRef{}, old_top};
 	}
 
 Scope* current_scope()
@@ -215,4 +219,15 @@ Scope* current_scope()
 Scope* global_scope()
 	{
 	return scopes.empty() ? 0 : scopes.front();
+	}
+
+}
+
+zeek::detail::ID* lookup_ID(
+	const char* name, const char* module,
+	bool no_global,
+	bool same_module_only,
+	bool check_export)
+	{
+	return zeek::detail::lookup_ID(name, module, no_global, same_module_only, check_export).get();
 	}

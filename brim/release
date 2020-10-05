@@ -1,59 +1,79 @@
 #!/bin/sh -ex
 
+export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+export CMAKE_C_COMPILER_LAUNCHER=ccache
+
 install_libpcap() {
-    install_prefix=${1:?'install prefix required'}
+    install_prefix=${1:?'install_prefix required'}
     mkdir libpcap
     wget -qO - https://github.com/the-tcpdump-group/libpcap/archive/libpcap-1.9.1.tar.gz |
         tar -xzf - -C libpcap --strip-components 1
     cmake -D CMAKE_INSTALL_PREFIX="$install_prefix" -D ENABLE_REMOTE=OFF \
         -G Ninja -S libpcap -B libpcap/build
+    ccache -z
+    ninja -C libpcap/build
+    ccache -s
     $sudo ninja -C libpcap/build install
-    $sudo rm -r libpcap
+    rm -r libpcap
 }
 
 case $(uname) in
     Darwin)
         sudo=sudo
-        brew install bison ninja openssl libmaxminddb
+        brew install bison ccache libmaxminddb ninja openssl
         ;;
     Linux)
         sudo=sudo
-        sudo apt-get -y install bison flex libssl-dev ninja-build \
-            libmaxminddb-dev
+        sudo apt-get -y install bison ccache flex libmaxminddb-dev libssl-dev ninja-build
         # Compile a recent libpcap since the one we'd get via apt-get is
         # old and hits https://github.com/brimsec/zeek/issues/17.
         install_libpcap /
         ;;
-    MSYS_NT*)
+    *_NT-*)
         exe=.exe
         export MSYS=winsymlinks:nativestrict
         export PATH=/mingw64/bin:$PATH
         go build -o brim/zeekrunner.exe brim/zeekrunner.go
         pacman -S --needed --noconfirm \
-            bison flex mingw-w64-x86_64-cmake mingw-w64-x86_64-gcc \
-            mingw-w64-x86_64-ninja mingw-w64-x86_64-openssl python-pip zip \
-            mingw-w64-x86_64-libmaxminddb
+            bison flex mingw-w64-x86_64-ccache \
+            mingw-w64-x86_64-cmake mingw-w64-x86_64-gcc \
+            mingw-w64-x86_64-libmaxminddb mingw-w64-x86_64-ninja \
+            mingw-w64-x86_64-openssl python-pip zip
         install_libpcap /mingw64
-        # Switch to real symlinks.
-        git config --replace-all core.symlinks true
-        git reset --hard
         # Replace the symlink at x509-signed_certificate_timestamp.pac
         # with a copy of the target file because CMake chokes with "file
         # INSTALL cannot read symlink" during installation.
-        rm src/file_analysis/analyzer/x509/x509-signed_certificate_timestamp.pac
-        MSYS= git checkout -- src/file_analysis/analyzer/x509/x509-signed_certificate_timestamp.pac
+        f=src/file_analysis/analyzer/x509/x509-signed_certificate_timestamp.pac
+        cp $f $f.tmp
+        rm $f
+        mv $f.tmp $f
+        # Need this until Broker updates to CAF 0.18.0.
+        sed -i 's/NOT WIN32/1/' auxil/broker/caf/libcaf_openssl/CMakeLists.txt
         ;;
     *)
-        echo "unknown OS" >&2
+        echo "unknown OS: $(uname)" >&2
         exit 1
         ;;
 esac
 
+#
+# Install Zeek.
+#
+
 ./configure \
-    --binary-package --disable-auxtools --disable-broker-tests \
+    --binary-package --disable-archiver --disable-auxtools --disable-broker-tests \
     --disable-python --disable-zeekctl --enable-static-binpac \
     --enable-static-broker --generator=Ninja --osx-min-version=10.14
+
+ccache -z
+ninja -C build zeek
+ccache -s
+
 $sudo ninja -C build scripts/install/strip src/install/strip
+
+#
+# Install Zeek packages.
+#
 
 $sudo pip install zkg
 PATH=$PWD/build:$PATH zkg autoconfig
@@ -69,11 +89,15 @@ $sudo zkg install --force hassh --version cfa2315257eaa972e86f7fcd694712e0d32762
 $sudo zkg install --force ja3 --version 133f2a128b873f9c40e4e65c2b9dc372a801cf24
 $sudo zkg install --force geoip-conn --version 73c8ab445112585195de9a3b2cd1140b68c367b4
 
+#
+# Create zip file.
+#
+
 mkdir -p zeek/bin zeek/share/zeek
-cp brim/zeekrunner$exe zeek
-cp /usr/local/zeek/bin/zeek$exe zeek/bin
+cp brim/zeekrunner$exe zeek/
+cp /usr/local/zeek/bin/zeek$exe zeek/bin/
 for d in base policy site; do
-    cp -R /usr/local/zeek/share/zeek/$d zeek/share/zeek
+    cp -R /usr/local/zeek/share/zeek/$d zeek/share/zeek/
 done
 
 # Can't use --diry with "git describe" on Windows because of the

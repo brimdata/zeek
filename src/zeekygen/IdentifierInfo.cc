@@ -11,13 +11,13 @@
 using namespace std;
 using namespace zeekygen;
 
-IdentifierInfo::IdentifierInfo(IntrusivePtr<ID> arg_id, ScriptInfo* script)
+IdentifierInfo::IdentifierInfo(zeek::detail::IDPtr arg_id, ScriptInfo* script)
 	: Info(),
 	  comments(), id(std::move(arg_id)), initial_val(), redefs(), fields(),
 	  last_field_seen(), declaring_script(script)
 	{
-	if ( id->ID_Val() && (id->IsOption() || id->IsRedefinable()) )
-		initial_val = id->ID_Val()->Clone();
+	if ( id->GetVal() && (id->IsOption() || id->IsRedefinable()) )
+		initial_val = id->GetVal()->Clone();
 	}
 
 IdentifierInfo::~IdentifierInfo()
@@ -31,19 +31,19 @@ IdentifierInfo::~IdentifierInfo()
 		delete it->second;
 	}
 
-void IdentifierInfo::AddRedef(const string& script, init_class ic,
-                              IntrusivePtr<Expr> init_expr, const vector<string>& comments)
+void IdentifierInfo::AddRedef(const string& script, zeek::detail::InitClass ic,
+                              zeek::detail::ExprPtr init_expr, const vector<string>& comments)
 	{
 	Redefinition* redef = new Redefinition(script, ic, std::move(init_expr), comments);
 	redefs.push_back(redef);
 	}
 
-void IdentifierInfo::AddRecordField(const TypeDecl* field,
-				    const string& script,
-				    vector<string>& comments)
+void IdentifierInfo::AddRecordField(const zeek::TypeDecl* field,
+                                    const string& script,
+                                    vector<string>& comments)
 	{
 	RecordField* rf = new RecordField();
-	rf->field = new TypeDecl(*field);
+	rf->field = new zeek::TypeDecl(*field);
 	rf->from_script = script;
 	rf->comments = comments;
 
@@ -116,7 +116,7 @@ string IdentifierInfo::DoReStructuredText(bool roles_only) const
 		if ( i > 0 )
 			d.NL();
 
-		if ( IsFunc(id->Type()->Tag()) )
+		if ( zeek::IsFunc(id->GetType()->Tag()) )
 			{
 			string s = comments[i];
 
@@ -139,15 +139,14 @@ time_t IdentifierInfo::DoGetModificationTime() const
 	return declaring_script->GetModificationTime();
 	}
 
-IdentifierInfo::Redefinition::Redefinition(
-                       std::string arg_script,
-                       init_class arg_ic,
-                       IntrusivePtr<Expr> arg_expr,
-                       std::vector<std::string> arg_comments)
-			: from_script(std::move(arg_script)),
-			  ic(arg_ic),
-			  init_expr(std::move(arg_expr)),
-			  comments(std::move(arg_comments))
+IdentifierInfo::Redefinition::Redefinition(std::string arg_script,
+                                           zeek::detail::InitClass arg_ic,
+                                           zeek::detail::ExprPtr arg_expr,
+                                           std::vector<std::string> arg_comments)
+	: from_script(std::move(arg_script)),
+	  ic(arg_ic),
+	  init_expr(std::move(arg_expr)),
+	  comments(std::move(arg_comments))
 	{
 	}
 

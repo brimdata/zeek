@@ -6,7 +6,6 @@
 
 #include "broker/Data.h"
 #include "CompHash.h"
-#include "IntrusivePtr.h"
 #include "Reporter.h"
 #include "Dict.h"
 
@@ -18,33 +17,27 @@ static void topk_element_hash_delete_func(void* val)
 	delete e;
 	}
 
-Element::~Element()
-	{
-	Unref(value);
-	}
-
-void TopkVal::Typify(BroType* t)
+void TopkVal::Typify(zeek::TypePtr t)
 	{
 	assert(!hash && !type);
-	type = t->Ref();
-	auto tl = make_intrusive<TypeList>(IntrusivePtr{NewRef{}, t});
-	tl->Append({NewRef{}, t});
+	type = std::move(t);
+	auto tl = zeek::make_intrusive<zeek::TypeList>(type);
+	tl->Append(type);
 	hash = new CompositeHash(std::move(tl));
 	}
 
 HashKey* TopkVal::GetHash(Val* v) const
 	{
-	HashKey* key = hash->ComputeHash(v, true);
+	auto key = hash->MakeHashKey(*v, true);
 	assert(key);
-	return key;
+	return key.release();
 	}
 
 TopkVal::TopkVal(uint64_t arg_size) : OpaqueVal(topk_type)
 	{
-	elementDict = new PDict<Element>;
+	elementDict = new zeek::PDict<Element>;
 	elementDict->SetDeleteFunc(topk_element_hash_delete_func);
 	size = arg_size;
-	type = nullptr;
 	numElements = 0;
 	pruned = false;
 	hash = nullptr;
@@ -52,10 +45,9 @@ TopkVal::TopkVal(uint64_t arg_size) : OpaqueVal(topk_type)
 
 TopkVal::TopkVal() : OpaqueVal(topk_type)
 	{
-	elementDict = new PDict<Element>;
+	elementDict = new zeek::PDict<Element>;
 	elementDict->SetDeleteFunc(topk_element_hash_delete_func);
 	size = 0;
-	type = nullptr;
 	numElements = 0;
 	hash = nullptr;
 	}
@@ -73,7 +65,6 @@ TopkVal::~TopkVal()
 		bi++;
 		}
 
-	Unref(type);
 	delete hash;
 	}
 
@@ -119,7 +110,7 @@ void TopkVal::Merge(const TopkVal* value, bool doPrune)
 				{
 				olde = new Element();
 				olde->epsilon = 0;
-				olde->value = e->value->Ref();
+				olde->value = e->value;
 				// insert at bucket position 0
 				if ( buckets.size() > 0 )
 					{
@@ -184,14 +175,14 @@ void TopkVal::Merge(const TopkVal* value, bool doPrune)
 		}
 	}
 
-IntrusivePtr<Val> TopkVal::DoClone(CloneState* state)
+zeek::ValPtr TopkVal::DoClone(CloneState* state)
 	{
-	auto clone = make_intrusive<TopkVal>(size);
+	auto clone = zeek::make_intrusive<TopkVal>(size);
 	clone->Merge(this);
 	return state->NewClone(this, std::move(clone));
 	}
 
-VectorVal* TopkVal::GetTopK(int k) const // returns vector
+zeek::VectorValPtr TopkVal::GetTopK(int k) const // returns vector
 	{
 	if ( numElements == 0 )
 		{
@@ -199,10 +190,8 @@ VectorVal* TopkVal::GetTopK(int k) const // returns vector
 		return nullptr;
 		}
 
-	auto vector_index = make_intrusive<TypeList>(IntrusivePtr{NewRef{}, type});
-	vector_index->Append({NewRef{}, type});
-	VectorType* v = new VectorType(std::move(vector_index));
-	VectorVal* t = new VectorVal(v);
+	auto v = zeek::make_intrusive<zeek::VectorType>(type);
+	auto t = zeek::make_intrusive<zeek::VectorVal>(std::move(v));
 
 	// this does no estimation if the results is correct!
 	// in any case - just to make this future-proof (and I am lazy) - this can return more than k.
@@ -217,7 +206,7 @@ VectorVal* TopkVal::GetTopK(int k) const // returns vector
 		while ( eit != (*it)->elements.end() )
 			{
 			//printf("Size: %ld\n", (*it)->elements.size());
-			t->Assign(read, (*eit)->value->Ref());
+			t->Assign(read, (*eit)->value);
 			read++;
 			eit++;
 			}
@@ -228,7 +217,6 @@ VectorVal* TopkVal::GetTopK(int k) const // returns vector
 		it--;
 		}
 
-	Unref(v);
 	return t;
 	}
 
@@ -280,14 +268,14 @@ uint64_t TopkVal::GetSum() const
 	return sum;
 	}
 
-void TopkVal::Encountered(Val* encountered)
+void TopkVal::Encountered(zeek::ValPtr encountered)
 	{
 	// ok, let's see if we already know this one.
 
 	if ( numElements == 0 )
-		Typify(encountered->Type());
+		Typify(encountered->GetType());
 	else
-		if ( ! same_type(type, encountered->Type()) )
+		if ( ! same_type(type, encountered->GetType()) )
 			{
 			reporter->Error("Trying to add element to topk with differing type from other elements");
 			return;
@@ -301,7 +289,7 @@ void TopkVal::Encountered(Val* encountered)
 		{
 		e = new Element();
 		e->epsilon = 0;
-		e->value = encountered->Ref(); // or no ref?
+		e->value = std::move(encountered);
 
 		// well, we do not know this one yet...
 		if ( numElements < size )
@@ -441,7 +429,7 @@ broker::expected<broker::data> TopkVal::DoSerialize() const
 			{
 			Element* element = *eit;
 			d.emplace_back(element->epsilon);
-			auto v = bro_broker::val_to_data(element->value);
+			auto v = bro_broker::val_to_data(element->value.get());
 			if ( ! v )
 				return broker::ec::invalid_data;
 
@@ -480,12 +468,12 @@ bool TopkVal::DoUnserialize(const broker::data& data)
 	auto no_type = caf::get_if<broker::none>(&(*v)[3]);
 	if ( ! no_type )
 		{
-		BroType* t = UnserializeType((*v)[3]);
+		auto t = UnserializeType((*v)[3]);
+
 		if ( ! t )
 			return false;
 
 		Typify(t);
-		Unref(t);
 		}
 
 	uint64_t i = 0;
@@ -506,14 +494,14 @@ bool TopkVal::DoUnserialize(const broker::data& data)
 		for ( uint64_t j = 0; j < *elements_count; j++ )
 			{
 			auto epsilon = caf::get_if<uint64_t>(&(*v)[idx++]);
-			auto val = bro_broker::data_to_val((*v)[idx++], type);
+			auto val = bro_broker::data_to_val((*v)[idx++], type.get());
 
 			if ( ! (epsilon && val) )
 				return false;
 
 			Element* e = new Element();
 			e->epsilon = *epsilon;
-			e->value = val.release();
+			e->value = std::move(val);
 			e->parent = b;
 
 			b->elements.insert(b->elements.end(), e);

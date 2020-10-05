@@ -192,11 +192,11 @@ void ARP_Analyzer::BadARP(const struct arp_pkthdr* hdr, const char* msg)
 		return;
 
 	mgr.Enqueue(bad_arp,
-		IntrusivePtr{AdoptRef{}, ConstructAddrVal(ar_spa(hdr))},
-		IntrusivePtr{AdoptRef{}, EthAddrToStr((const u_char*) ar_sha(hdr))},
-		IntrusivePtr{AdoptRef{}, ConstructAddrVal(ar_tpa(hdr))},
-		IntrusivePtr{AdoptRef{}, EthAddrToStr((const u_char*) ar_tha(hdr))},
-		make_intrusive<StringVal>(msg)
+		ToAddrVal(ar_spa(hdr)),
+		ToEthAddrStr((const u_char*) ar_sha(hdr)),
+		ToAddrVal(ar_tpa(hdr)),
+		ToEthAddrStr((const u_char*) ar_tha(hdr)),
+		zeek::make_intrusive<zeek::StringVal>(msg)
 	);
 	}
 
@@ -214,25 +214,31 @@ void ARP_Analyzer::RREvent(EventHandlerPtr e,
 		return;
 
 	mgr.Enqueue(e,
-		IntrusivePtr{AdoptRef{}, EthAddrToStr(src)},
-		IntrusivePtr{AdoptRef{}, EthAddrToStr(dst)},
-		IntrusivePtr{AdoptRef{}, ConstructAddrVal(spa)},
-		IntrusivePtr{AdoptRef{}, EthAddrToStr((const u_char*) sha)},
-		IntrusivePtr{AdoptRef{}, ConstructAddrVal(tpa)},
-		IntrusivePtr{AdoptRef{}, EthAddrToStr((const u_char*) tha)}
+		ToEthAddrStr(src),
+		ToEthAddrStr(dst),
+		ToAddrVal(spa),
+		ToEthAddrStr((const u_char*) sha),
+		ToAddrVal(tpa),
+		ToEthAddrStr((const u_char*) tha)
 	);
 	}
 
-AddrVal* ARP_Analyzer::ConstructAddrVal(const void* addr)
+zeek::AddrVal* ARP_Analyzer::ConstructAddrVal(const void* addr)
+	{ return ToAddrVal(addr).release(); }
+
+zeek::AddrValPtr ARP_Analyzer::ToAddrVal(const void* addr)
 	{
 	// ### For now, we only handle IPv4 addresses.
-	return new AddrVal(*(const uint32_t*) addr);
+	return zeek::make_intrusive<zeek::AddrVal>(*(const uint32_t*) addr);
 	}
 
-StringVal* ARP_Analyzer::EthAddrToStr(const u_char* addr)
+zeek::StringVal* ARP_Analyzer::EthAddrToStr(const u_char* addr)
+	{ return ToEthAddrStr(addr).release(); }
+
+zeek::StringValPtr ARP_Analyzer::ToEthAddrStr(const u_char* addr)
 	{
 	char buf[1024];
 	snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x",
 			addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
-	return new StringVal(buf);
+	return zeek::make_intrusive<zeek::StringVal>(buf);
 	}

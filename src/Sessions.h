@@ -61,7 +61,7 @@ public:
 	// Looks up the connection referred to by the given Val,
 	// which should be a conn_id record.  Returns nil if there's
 	// no such connection or the Val is ill-formed.
-	Connection* FindConnection(Val* v);
+	Connection* FindConnection(zeek::Val* v);
 
 	void Remove(Connection* c);
 	void Remove(FragReassembler* f);
@@ -243,7 +243,7 @@ protected:
 class IPTunnelTimer final : public Timer {
 public:
 	IPTunnelTimer(double t, NetSessions::IPPair p)
-	: Timer(t + BifConst::Tunnel::ip_tunnel_timeout,
+	: Timer(t + zeek::BifConst::Tunnel::ip_tunnel_timeout,
 			TIMER_IP_TUNNEL_INACTIVITY), tunnel_idx(p) {}
 
 	~IPTunnelTimer() override {}

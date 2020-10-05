@@ -11,15 +11,31 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <memory>
 
 #include <broker/data.hh>
 #include <broker/expected.hh>
 
-namespace trigger { class Trigger; }
-class CallExpr;
-class BroFunc;
+ZEEK_FORWARD_DECLARE_NAMESPACED(CallExpr, zeek::detail);
+ZEEK_FORWARD_DECLARE_NAMESPACED(Trigger, zeek::detail::trigger);
 
-class Frame :  public BroObj {
+namespace zeek::detail { class ScriptFunc; }
+using BroFunc [[deprecated("Remove in v4.1. Use zeek::detail::ScriptFunc instead.")]] = zeek::detail::ScriptFunc;
+
+namespace zeek {
+using ValPtr = zeek::IntrusivePtr<Val>;
+
+namespace detail {
+using IDPtr = zeek::IntrusivePtr<ID>;
+
+namespace trigger {
+using TriggerPtr = zeek::IntrusivePtr<Trigger>;
+}
+
+class Frame;
+using FramePtr = zeek::IntrusivePtr<Frame>;
+
+class Frame :  public Obj {
 public:
 	/**
 	 * Constructs a new frame belonging to *func* with *fn_args*
@@ -29,7 +45,7 @@ public:
 	 * @param func the function that is creating this frame
 	 * @param fn_args the arguments being passed to that function.
 	 */
-	Frame(int size, const BroFunc* func, const zeek::Args* fn_args);
+	Frame(int size, const ScriptFunc* func, const zeek::Args* fn_args);
 
 	/**
 	 * Deletes the frame. Unrefs its trigger, the values that it
@@ -41,19 +57,21 @@ public:
 	 * @param n the index to get.
 	 * @return the value at index *n* of the underlying array.
 	 */
-	Val* NthElement(int n) const	{ return frame[n]; }
+	const zeek::ValPtr& GetElement(int n) const
+		{ return frame[n].val; }
+
+	[[deprecated("Remove in v4.1.  Use GetElement(int).")]]
+	zeek::Val* NthElement(int n) const	{ return frame[n].val.get(); }
 
 	/**
-	 * Sets the element at index *n* of the underlying array
-	 * to *v*.
-	 *
+	 * Sets the element at index *n* of the underlying array to *v*.
 	 * @param n the index to set
 	 * @param v the value to set it to
-	 * @param weak_ref whether the frame owns the value and should unref
-	 * it upon destruction.  Used to break circular references between
-	 * lambda functions and closure frames.
 	 */
-	void SetElement(int n, Val* v, bool weak_ref = false);
+	void SetElement(int n, zeek::ValPtr v);
+
+	[[deprecated("Remove in v4.1.  Pass IntrusivePtr instead.")]]
+	void SetElement(int n, zeek::Val* v);
 
 	/**
 	 * Associates *id* and *v* in the frame. Future lookups of
@@ -62,7 +80,9 @@ public:
 	 * @param id the ID to associate
 	 * @param v the value to associate it with
 	 */
-	void SetElement(const ID* id, Val* v);
+	void SetElement(const zeek::detail::ID* id, zeek::ValPtr v);
+	void SetElement(const zeek::detail::IDPtr& id, zeek::ValPtr v)
+		{ SetElement(id.get(), std::move(v)); }
 
 	/**
 	 * Gets the value associated with *id* and returns it. Returns
@@ -71,21 +91,19 @@ public:
 	 * @param id the id who's value to retreive
 	 * @return the value associated with *id*
 	 */
-	Val* GetElement(const ID* id) const;
+	const zeek::ValPtr& GetElementByID(const zeek::detail::IDPtr& id) const
+		{ return GetElementByID(id.get()); }
+
+	[[deprecated("Remove in v4.1.  Use GetElementByID().")]]
+	zeek::Val* GetElement(const zeek::detail::ID* id) const
+		{ return GetElementByID(id).get(); }
 
 	/**
 	 * Resets all of the indexes from [*startIdx, frame_size) in
-	 * the Frame. Unrefs all of the values in reset indexes.
-	 *
+	 * the Frame.
 	 * @param the first index to unref.
 	 */
 	void Reset(int startIdx);
-
-	/**
-	 * Resets all of the values in the frame and clears out the
-	 * underlying array.
-	 */
-	void Release();
 
 	/**
 	 * Describes the frame and all of its values.
@@ -95,7 +113,7 @@ public:
 	/**
 	 * @return the function that the frame is associated with.
 	 */
-	const BroFunc* GetFunction() const	{ return function; }
+	const ScriptFunc* GetFunction() const	{ return function; }
 
 	/**
 	 * @return the arguments passed to the function that this frame
@@ -108,19 +126,19 @@ public:
 	 *
 	 * @param func the function for the frame to be associated with.
 	 */
-	void SetFunction(BroFunc* func)	{ function = func; }
+	void SetFunction(ScriptFunc* func)	{ function = func; }
 
 	/**
 	 * Sets the next statement to be executed in the context of the frame.
 	 *
 	 * @param stmt the statement to set it to.
 	 */
-	void SetNextStmt(Stmt* stmt)	{ next_stmt = stmt; }
+	void SetNextStmt(zeek::detail::Stmt* stmt)	{ next_stmt = stmt; }
 
 	/**
 	 * @return the next statement to be executed in the context of the frame.
 	 */
-	Stmt* GetNextStmt() const	{ return next_stmt; }
+	zeek::detail::Stmt* GetNextStmt() const	{ return next_stmt; }
 
 	/** Used to implement "next" command in debugger. */
 	void BreakBeforeNextStmt(bool should_break)
@@ -157,7 +175,7 @@ public:
 	 * *selection* have been cloned. All other values are made to be
 	 * null.
 	 */
-	Frame* SelectiveClone(const id_list& selection, BroFunc* func) const;
+	Frame* SelectiveClone(const id_list& selection, ScriptFunc* func) const;
 
 	/**
 	 * Serializes the Frame into a Broker representation.
@@ -191,7 +209,7 @@ public:
 	 * and the second is the unserialized frame with reference count +1, or
 	 * null if the serialization wasn't successful.
 	 */
-	static std::pair<bool, IntrusivePtr<Frame>> Unserialize(const broker::vector& data);
+	static std::pair<bool, FramePtr> Unserialize(const broker::vector& data);
 
 	/**
 	 * Sets the IDs that the frame knows offsets for. These offsets will
@@ -212,13 +230,13 @@ public:
 
 	// If the frame is run in the context of a trigger condition evaluation,
 	// the trigger needs to be registered.
-	void SetTrigger(IntrusivePtr<trigger::Trigger> arg_trigger);
+	void SetTrigger(zeek::detail::trigger::TriggerPtr arg_trigger);
 	void ClearTrigger();
-	trigger::Trigger* GetTrigger() const		{ return trigger.get(); }
+	zeek::detail::trigger::Trigger* GetTrigger() const		{ return trigger.get(); }
 
-	void SetCall(const CallExpr* arg_call)	{ call = arg_call; }
+	void SetCall(const zeek::detail::CallExpr* arg_call)	{ call = arg_call; }
 	void ClearCall()			{ call = nullptr; }
-	const CallExpr* GetCall() const		{ return call; }
+	const zeek::detail::CallExpr* GetCall() const		{ return call; }
 
 	void SetDelayed()	{ delayed = true; }
 	bool HasDelayed() const	{ return delayed; }
@@ -230,19 +248,46 @@ public:
 	 * weak references prevents unbreakable circular references that
 	 * otherwise cause memory leaks.
 	 */
-	void AddFunctionWithClosureRef(BroFunc* func);
+	void AddFunctionWithClosureRef(ScriptFunc* func);
 
 private:
 
 	using OffsetMap = std::unordered_map<std::string, int>;
 
+	struct Element {
+		zeek::ValPtr val;
+		// Weak reference is used to prevent circular reference memory leaks
+		// in lambdas/closures.
+		bool weak_ref;
+	};
+
+	const zeek::ValPtr& GetElementByID(const zeek::detail::ID* id) const;
+
 	/**
-	 * Unrefs the value at offset 'n' frame unless it's a weak reference.
+	 * Sets the element at index *n* of the underlying array to *v*, but does
+	 * not take ownership of a reference count to it.  This method is used to
+	 * break circular references between lambda functions and closure frames.
+	 * @param n the index to set
+	 * @param v the value to set it to (caller has not Ref'd and Frame will
+	 * not Unref it)
 	 */
-	void UnrefElement(int n);
+	void SetElementWeak(int n, zeek::Val* v);
+
+	/**
+	 * Clone an element at an offset into other frame if not equal to a given
+	 * function (in that case just assigna weak reference).  Used to break
+	 * circular references between lambda functions and closure frames.
+	 */
+	void CloneNonFuncElement(int offset, ScriptFunc* func, Frame* other) const;
+
+	/**
+	 * Resets the value at offset 'n' frame (by decrementing reference
+	 * count if not a weak reference).
+	 */
+	void ClearElement(int n);
 
 	/** Have we captured this id? */
-	bool IsOuterID(const ID* in) const;
+	bool IsOuterID(const zeek::detail::ID* in) const;
 
 	/** Serializes an offset_map */
 	static broker::expected<broker::data>
@@ -269,11 +314,7 @@ private:
 	bool delayed;
 
 	/** Associates ID's offsets with values. */
-	Val** frame;
-
-	/** Values that are weakly referenced by the frame.  Used to
-	 * prevent circular reference memory leaks in lambda/closures */
-	bool* weak_refs = nullptr;
+	std::unique_ptr<Element[]> frame;
 
 	/** The enclosing frame of this frame. */
 	Frame* closure;
@@ -288,18 +329,23 @@ private:
 	std::unique_ptr<OffsetMap> offset_map;
 
 	/** The function this frame is associated with. */
-	const BroFunc* function;
+	const ScriptFunc* function;
 	/** The arguments to the function that this Frame is associated with. */
 	const zeek::Args* func_args;
 
 	/** The next statement to be evaluted in the context of this frame. */
-	Stmt* next_stmt;
+	zeek::detail::Stmt* next_stmt;
 
-	IntrusivePtr<trigger::Trigger> trigger;
-	const CallExpr* call;
+	zeek::detail::trigger::TriggerPtr trigger;
+	const zeek::detail::CallExpr* call;
 
-	std::unique_ptr<std::vector<BroFunc*>> functions_with_closure_frame_reference;
+	std::unique_ptr<std::vector<ScriptFunc*>> functions_with_closure_frame_reference;
 };
+
+} // namespace detail
+} // namespace zeek
+
+using Frame [[deprecated("Remove in v4.1. Use zeek::detail::Frame instead.")]] = zeek::detail::Frame;
 
 /**
  * If we stopped using this and instead just made a struct of the information
@@ -311,4 +357,4 @@ private:
  * DebugFrame which provides the information that the debugger uses. See:
  * https://stackoverflow.com/a/16211097
  */
-extern std::vector<Frame*> g_frame_stack;
+extern std::vector<zeek::detail::Frame*> g_frame_stack;

@@ -6,7 +6,7 @@
 
 class ODesc;
 
-namespace plugin {
+namespace zeek::plugin {
 
 namespace component {
 
@@ -22,7 +22,8 @@ enum Type {
 	PKTSRC,	/// A packet source.
 	PKTDUMPER	/// A packet dumper.
 	};
-}
+
+} // namespace component
 
 /**
  * Base class for plugin components. A component is a specific piece of
@@ -104,3 +105,29 @@ private:
 };
 
 }
+
+namespace plugin
+{
+using Component [[deprecated("Remove in v4.1. Use zeek::plugin::Component instead.")]] = zeek::plugin::Component;
+
+namespace component
+{
+
+using Type [[deprecated("Remove in v4.1. Use zeek::plugin::component::Type instead.")]] = zeek::plugin::component::Type;
+[[deprecated("Remove in v4.1. Use zeek::plugin::component::READER instead.")]]
+constexpr auto READER = zeek::plugin::component::READER;
+[[deprecated("Remove in v4.1. Use zeek::plugin::component::WRITER instead.")]]
+constexpr auto WRITER = zeek::plugin::component::WRITER;
+[[deprecated("Remove in v4.1. Use zeek::plugin::component::ANALYZER instead.")]]
+constexpr auto ANALYZER = zeek::plugin::component::ANALYZER;
+[[deprecated("Remove in v4.1. Use zeek::plugin::component::FILE_ANALYZER instead.")]]
+constexpr auto FILE_ANALYZER = zeek::plugin::component::FILE_ANALYZER;
+[[deprecated("Remove in v4.1. Use zeek::plugin::component::IOSOURCE instead.")]]
+constexpr auto IOSOURCE = zeek::plugin::component::IOSOURCE;
+[[deprecated("Remove in v4.1. Use zeek::plugin::component::PKTSRC instead.")]]
+constexpr auto PKTSRC = zeek::plugin::component::PKTSRC;
+[[deprecated("Remove in v4.1. Use zeek::plugin::component::PKTDUMPER instead.")]]
+constexpr auto PKTDUMPER = zeek::plugin::component::PKTDUMPER;
+
+} // namespace component
+} // namespace plugin

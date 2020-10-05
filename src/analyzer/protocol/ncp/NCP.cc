@@ -64,18 +64,18 @@ void NCP_Session::DeliverFrame(const binpac::NCP::ncp_frame* frame)
 		if ( frame->is_orig() )
 			analyzer->EnqueueConnEvent(f,
 				analyzer->ConnVal(),
-				val_mgr->Count(frame->frame_type()),
-				val_mgr->Count(frame->body_length()),
-				val_mgr->Count(req_func)
+				zeek::val_mgr->Count(frame->frame_type()),
+				zeek::val_mgr->Count(frame->body_length()),
+				zeek::val_mgr->Count(req_func)
 			);
 		else
 			analyzer->EnqueueConnEvent(f,
 				analyzer->ConnVal(),
-				val_mgr->Count(frame->frame_type()),
-				val_mgr->Count(frame->body_length()),
-				val_mgr->Count(req_frame_type),
-				val_mgr->Count(req_func),
-				val_mgr->Count(frame->reply()->completion_code())
+				zeek::val_mgr->Count(frame->frame_type()),
+				zeek::val_mgr->Count(frame->body_length()),
+				zeek::val_mgr->Count(req_frame_type),
+				zeek::val_mgr->Count(req_func),
+				zeek::val_mgr->Count(frame->reply()->completion_code())
 			);
 		}
 	}
@@ -129,7 +129,7 @@ int FrameBuffer::Deliver(int &len, const u_char* &data)
 
 		if ( msg_len > buf_len )
 			{
-			if ( msg_len > BifConst::NCP::max_frame_size )
+			if ( msg_len > zeek::BifConst::NCP::max_frame_size )
 				return 1;
 
 			buf_len = msg_len;

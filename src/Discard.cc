@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include "BroString.h"
+#include "ZeekString.h"
 #include "Net.h"
 #include "Func.h"
 #include "Var.h"
@@ -16,12 +16,12 @@
 
 Discarder::Discarder()
 	{
-	check_ip = internal_func("discarder_check_ip");
-	check_tcp = internal_func("discarder_check_tcp");
-	check_udp = internal_func("discarder_check_udp");
-	check_icmp = internal_func("discarder_check_icmp");
+	check_ip = zeek::id::find_func("discarder_check_ip");
+	check_tcp = zeek::id::find_func("discarder_check_tcp");
+	check_udp = zeek::id::find_func("discarder_check_udp");
+	check_icmp = zeek::id::find_func("discarder_check_icmp");
 
-	discarder_maxlen = static_cast<int>(opt_internal_int("discarder_maxlen"));
+	discarder_maxlen = static_cast<int>(zeek::id::find_val("discarder_maxlen")->AsCount());
 	}
 
 Discarder::~Discarder()
@@ -39,11 +39,11 @@ bool Discarder::NextPacket(const IP_Hdr* ip, int len, int caplen)
 
 	if ( check_ip )
 		{
-		zeek::Args args{{AdoptRef{}, ip->BuildPktHdrVal()}};
+		zeek::Args args{ip->ToPktHdrVal()};
 
 		try
 			{
-			discard_packet = check_ip->Call(args)->AsBool();
+			discard_packet = check_ip->Invoke(&args)->AsBool();
 			}
 
 		catch ( InterpreterException& e )
@@ -92,13 +92,13 @@ bool Discarder::NextPacket(const IP_Hdr* ip, int len, int caplen)
 			int th_len = tp->th_off * 4;
 
 			zeek::Args args{
-				{AdoptRef{}, ip->BuildPktHdrVal()},
-				{AdoptRef{}, BuildData(data, th_len, len, caplen)},
+				ip->ToPktHdrVal(),
+				{zeek::AdoptRef{}, BuildData(data, th_len, len, caplen)},
 			};
 
 			try
 				{
-				discard_packet = check_tcp->Call(args)->AsBool();
+				discard_packet = check_tcp->Invoke(&args)->AsBool();
 				}
 
 			catch ( InterpreterException& e )
@@ -116,13 +116,13 @@ bool Discarder::NextPacket(const IP_Hdr* ip, int len, int caplen)
 			int uh_len = sizeof (struct udphdr);
 
 			zeek::Args args{
-				{AdoptRef{}, ip->BuildPktHdrVal()},
-				{AdoptRef{}, BuildData(data, uh_len, len, caplen)},
+				ip->ToPktHdrVal(),
+				{zeek::AdoptRef{}, BuildData(data, uh_len, len, caplen)},
 			};
 
 			try
 				{
-				discard_packet = check_udp->Call(args)->AsBool();
+				discard_packet = check_udp->Invoke(&args)->AsBool();
 				}
 
 			catch ( InterpreterException& e )
@@ -138,11 +138,11 @@ bool Discarder::NextPacket(const IP_Hdr* ip, int len, int caplen)
 			{
 			const struct icmp* ih = (const struct icmp*) data;
 
-			zeek::Args args{{AdoptRef{}, ip->BuildPktHdrVal()}};
+			zeek::Args args{ip->ToPktHdrVal()};
 
 			try
 				{
-				discard_packet = check_icmp->Call(args)->AsBool();
+				discard_packet = check_icmp->Invoke(&args)->AsBool();
 				}
 
 			catch ( InterpreterException& e )
@@ -155,7 +155,7 @@ bool Discarder::NextPacket(const IP_Hdr* ip, int len, int caplen)
 	return discard_packet;
 	}
 
-Val* Discarder::BuildData(const u_char* data, int hdrlen, int len, int caplen)
+zeek::Val* Discarder::BuildData(const u_char* data, int hdrlen, int len, int caplen)
 	{
 	len -= hdrlen;
 	caplen -= hdrlen;
@@ -163,5 +163,5 @@ Val* Discarder::BuildData(const u_char* data, int hdrlen, int len, int caplen)
 
 	len = std::max(std::min(std::min(len, caplen), discarder_maxlen), 0);
 
-	return new StringVal(new BroString(data, len, true));
+	return new zeek::StringVal(new zeek::String(data, len, true));
 	}

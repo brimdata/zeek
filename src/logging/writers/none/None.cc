@@ -12,7 +12,7 @@ using namespace writer;
 bool None::DoInit(const WriterInfo& info, int num_fields,
 	    const threading::Field* const * fields)
 	{
-	if ( BifConst::LogNone::debug )
+	if ( zeek::BifConst::LogNone::debug )
 		{
 		std::cout << "[logging::writer::None]" << std::endl;
 		std::cout << "  path=" << info.path << std::endl;
@@ -35,7 +35,7 @@ bool None::DoInit(const WriterInfo& info, int num_fields,
 			{
 			const threading::Field* field = fields[i];
 			std::cout << "  field " << field->name << ": "
-				  << type_name(field->type) << std::endl;
+				  << zeek::type_name(field->type) << std::endl;
 			}
 
 		std::cout << std::endl;
@@ -54,5 +54,3 @@ bool None::DoRotate(const char* rotated_path, double open, double close, bool te
 
 	return true;
 	}
-
-

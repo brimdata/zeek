@@ -8,6 +8,7 @@ extern "C" {
 
 long random(void);
 void srandom(unsigned seed);
+char *realpath(const char *file_name, char *resolved_name);
 int setenv(const char *envname, const char *envval, int overwrite);
 int unsetenv(const char *name);
 

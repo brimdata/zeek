@@ -44,7 +44,7 @@ std::map<string, Filemap*> g_dbgfilemaps;
 // current context; you don't want to do it after a step or next
 // command unless you've exited a function.
 static bool step_or_next_pending = false;
-static Frame* last_frame;
+static zeek::detail::Frame* last_frame;
 
 DebuggerState::DebuggerState()
 	{
@@ -55,7 +55,7 @@ DebuggerState::DebuggerState()
 	BreakFromSignal(false);
 
 	// ### Don't choose this arbitrary size! Extend Frame.
-	dbg_locals = new Frame(1024, /* func = */ nullptr, /* fn_args = */ nullptr);
+	dbg_locals = new zeek::detail::Frame(1024, /* func = */ nullptr, /* fn_args = */ nullptr);
 	}
 
 DebuggerState::~DebuggerState()
@@ -135,8 +135,8 @@ int TraceState::LogTrace(const char* fmt, ...)
 	// Prefix includes timestamp and file/line info.
 	fprintf(trace_file, "%.6f ", network_time);
 
-	const Stmt* stmt;
-	Location loc;
+	const zeek::detail::Stmt* stmt;
+	zeek::detail::Location loc;
 	loc.filename = nullptr;
 
 	if ( g_frame_stack.size() > 0 && g_frame_stack.back() )
@@ -146,7 +146,7 @@ int TraceState::LogTrace(const char* fmt, ...)
 			loc = *stmt->GetLocationInfo();
 		else
 			{
-			const BroFunc* f = g_frame_stack.back()->GetFunction();
+			const zeek::detail::ScriptFunc* f = g_frame_stack.back()->GetFunction();
 			if ( f )
 				loc = *f->GetLocationInfo();
 			}
@@ -174,7 +174,7 @@ int TraceState::LogTrace(const char* fmt, ...)
 
 
 // Helper functions.
-void get_first_statement(Stmt* list, Stmt*& first, Location& loc)
+void get_first_statement(zeek::detail::Stmt* list, zeek::detail::Stmt*& first, zeek::detail::Location& loc)
 	{
 	if ( ! list )
 		{
@@ -197,17 +197,17 @@ void get_first_statement(Stmt* list, Stmt*& first, Location& loc)
 static void parse_function_name(vector<ParseLocationRec>& result,
 				ParseLocationRec& plr, const string& s)
 	{ // function name
-	auto id = lookup_ID(s.c_str(), current_module.c_str());
+	const auto& id = zeek::detail::lookup_ID(s.c_str(), zeek::detail::current_module.c_str());
 
 	if ( ! id )
 		{
-		string fullname = make_full_var_name(current_module.c_str(), s.c_str());
+		string fullname = make_full_var_name(zeek::detail::current_module.c_str(), s.c_str());
 		debug_msg("Function %s not defined.\n", fullname.c_str());
 		plr.type = plrUnknown;
 		return;
 		}
 
-	if ( ! id->Type()->AsFuncType() )
+	if ( ! id->GetType()->AsFuncType() )
 		{
 		debug_msg("Function %s not declared.\n", id->Name());
 		plr.type = plrUnknown;
@@ -221,8 +221,8 @@ static void parse_function_name(vector<ParseLocationRec>& result,
 		return;
 		}
 
-	const Func* func = id->ID_Val()->AsFunc();
-	const vector<Func::Body>& bodies = func->GetBodies();
+	const zeek::Func* func = id->GetVal()->AsFunc();
+	const vector<zeek::Func::Body>& bodies = func->GetBodies();
 
 	if ( bodies.size() == 0 )
 		{
@@ -231,7 +231,7 @@ static void parse_function_name(vector<ParseLocationRec>& result,
 		return;
 		}
 
-	Stmt* body = nullptr;	// the particular body we care about; 0 = all
+	zeek::detail::Stmt* body = nullptr;	// the particular body we care about; 0 = all
 
 	if ( bodies.size() == 1 )
 		body = bodies[0].stmts.get();
@@ -243,8 +243,8 @@ static void parse_function_name(vector<ParseLocationRec>& result,
 				 "Please choose one of the following options:\n");
 			for ( unsigned int i = 0; i < bodies.size(); ++i )
 				{
-				Stmt* first;
-				Location stmt_loc;
+				zeek::detail::Stmt* first;
+				zeek::detail::Location stmt_loc;
 				get_first_statement(bodies[i].stmts.get(), first, stmt_loc);
 				debug_msg("[%d] %s:%d\n", i+1, stmt_loc.filename, stmt_loc.first_line);
 				}
@@ -286,8 +286,8 @@ static void parse_function_name(vector<ParseLocationRec>& result,
 	plr.type = plrFunction;
 
 	// Find first atomic (non-STMT_LIST) statement
-	Stmt* first;
-	Location stmt_loc;
+	zeek::detail::Stmt* first;
+	zeek::detail::Location stmt_loc;
 
 	if ( body )
 		{
@@ -728,17 +728,17 @@ static char* get_prompt(bool reset_counter = false)
 	return prompt;
 	}
 
-string get_context_description(const Stmt* stmt, const Frame* frame)
+string get_context_description(const zeek::detail::Stmt* stmt, const zeek::detail::Frame* frame)
 	{
 	ODesc d;
-	const BroFunc* func = frame ? frame->GetFunction() : nullptr;
+	const zeek::detail::ScriptFunc* func = frame ? frame->GetFunction() : nullptr;
 
 	if ( func )
 		func->DescribeDebug(&d, frame->GetFuncArgs());
 	else
 		d.Add("<unknown function>", 0);
 
-	Location loc;
+	zeek::detail::Location loc;
 	if ( stmt )
 		loc = *stmt->GetLocationInfo();
 	else
@@ -769,18 +769,18 @@ int dbg_handle_debug_input()
 		g_debugger_state.BreakFromSignal(false);
 		}
 
-	Frame* curr_frame = g_frame_stack.back();
-	const BroFunc* func = curr_frame->GetFunction();
+	zeek::detail::Frame* curr_frame = g_frame_stack.back();
+	const zeek::detail::ScriptFunc* func = curr_frame->GetFunction();
 	if ( func )
-		current_module = extract_module_name(func->Name());
+		zeek::detail::current_module = extract_module_name(func->Name());
 	else
-		current_module = GLOBAL_MODULE_NAME;
+		zeek::detail::current_module = GLOBAL_MODULE_NAME;
 
-	const Stmt* stmt = curr_frame->GetNextStmt();
+	const zeek::detail::Stmt* stmt = curr_frame->GetNextStmt();
 	if ( ! stmt )
 		reporter->InternalError("Assertion failed: stmt != 0");
 
-	const Location loc = *stmt->GetLocationInfo();
+	const zeek::detail::Location loc = *stmt->GetLocationInfo();
 
 	if ( ! step_or_next_pending || g_frame_stack.back() != last_frame )
 		{
@@ -840,7 +840,7 @@ int dbg_handle_debug_input()
 
 
 // Return true to continue execution, false to abort.
-bool pre_execute_stmt(Stmt* stmt, Frame* f)
+bool pre_execute_stmt(zeek::detail::Stmt* stmt, zeek::detail::Frame* f)
 	{
 	if ( ! g_policy_debug ||
 	     stmt->Tag() == STMT_LIST || stmt->Tag() == STMT_NULL )
@@ -905,7 +905,7 @@ bool pre_execute_stmt(Stmt* stmt, Frame* f)
 	return true;
 	}
 
-bool post_execute_stmt(Stmt* stmt, Frame* f, Val* result, stmt_flow_type* flow)
+bool post_execute_stmt(zeek::detail::Stmt* stmt, zeek::detail::Frame* f, zeek::Val* result, stmt_flow_type* flow)
 	{
 	// Handle the case where someone issues a "next" debugger command,
 	// but we're at a return statement, so the next statement is in
@@ -935,7 +935,7 @@ bool post_execute_stmt(Stmt* stmt, Frame* f, Val* result, stmt_flow_type* flow)
 
 // Evaluates the given expression in the context of the currently selected
 // frame.  Returns the resulting value, or nil if none (or there was an error).
-Expr* g_curr_debug_expr = nullptr;
+zeek::detail::Expr* g_curr_debug_expr = nullptr;
 const char* g_curr_debug_error = nullptr;
 bool in_debug = false;
 
@@ -948,7 +948,7 @@ extern YYLTYPE yylloc;	// holds start line and column of token
 extern int line_number;
 extern const char* filename;
 
-IntrusivePtr<Val> dbg_eval_expr(const char* expr)
+zeek::ValPtr dbg_eval_expr(const char* expr)
 	{
 	// Push the current frame's associated scope.
 	// Note: g_debugger_state.curr_frame_idx is the user-visible number,
@@ -959,15 +959,15 @@ IntrusivePtr<Val> dbg_eval_expr(const char* expr)
 	if ( ! (frame_idx >= 0 && (unsigned) frame_idx < g_frame_stack.size())  )
 		reporter->InternalError("Assertion failed: frame_idx >= 0 && (unsigned) frame_idx < g_frame_stack.size()");
 
-	Frame* frame = g_frame_stack[frame_idx];
+	zeek::detail::Frame* frame = g_frame_stack[frame_idx];
 	if ( ! (frame)  )
 		reporter->InternalError("Assertion failed: frame");
 
-	const BroFunc* func = frame->GetFunction();
+	const zeek::detail::ScriptFunc* func = frame->GetFunction();
 	if ( func )
 		{
 		Ref(func->GetScope());
-		push_existing_scope(func->GetScope());
+		zeek::detail::push_existing_scope(func->GetScope());
 		}
 
 	// ### Possibly push a debugger-local scope?
@@ -983,7 +983,7 @@ IntrusivePtr<Val> dbg_eval_expr(const char* expr)
 	yylloc.first_line = yylloc.last_line = line_number = 1;
 
 	// Parse the thing into an expr.
-	IntrusivePtr<Val> result;
+	zeek::ValPtr result;
 	if ( yyparse() )
 		{
 		if ( g_curr_debug_error )
@@ -1001,7 +1001,7 @@ IntrusivePtr<Val> dbg_eval_expr(const char* expr)
 		result = g_curr_debug_expr->Eval(frame);
 
 	if ( func )
-		pop_scope();
+		zeek::detail::pop_scope();
 
 	delete g_curr_debug_expr;
 	g_curr_debug_expr = nullptr;

@@ -4,7 +4,7 @@
 
 #include "Pipe.h"
 
-namespace bro {
+namespace zeek::detail {
 
 class Flare {
 public:
@@ -52,4 +52,4 @@ private:
 #endif
 };
 
-} // namespace bro
+} // namespace zeek::detail

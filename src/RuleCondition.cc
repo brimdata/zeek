@@ -6,8 +6,8 @@
 #include "Reporter.h"
 #include "Scope.h"
 #include "Func.h"
+#include "ID.h"
 #include "Val.h"
-#include "Var.h" // for internal_type()
 
 static inline bool is_established(const analyzer::tcp::TCP_Endpoint* e)
 	{
@@ -129,26 +129,27 @@ bool RuleConditionPayloadSize::DoMatch(Rule* rule, RuleEndpointState* state,
 
 RuleConditionEval::RuleConditionEval(const char* func)
 	{
-	id = global_scope()->Lookup(func);
+	id = zeek::detail::global_scope()->Find(func).get();
 	if ( ! id )
 		{
 		rules_error("unknown identifier", func);
 		return;
 		}
 
-	if ( id->Type()->Tag() == TYPE_FUNC )
+	if ( id->GetType()->Tag() == zeek::TYPE_FUNC )
 		{
 		// Validate argument quantity and type.
-		FuncType* f = id->Type()->AsFuncType();
+		zeek::FuncType* f = id->GetType()->AsFuncType();
 
-		if ( f->YieldType()->Tag() != TYPE_BOOL )
+		if ( f->Yield()->Tag() != zeek::TYPE_BOOL )
 			rules_error("eval function type must yield a 'bool'", func);
 
-		TypeList tl;
-		tl.Append({NewRef{}, internal_type("signature_state")});
-		tl.Append(base_type(TYPE_STRING));
+		static auto signature_state = zeek::id::find_type<zeek::RecordType>("signature_state");
+		zeek::TypeList tl;
+		tl.Append(signature_state);
+		tl.Append(zeek::base_type(zeek::TYPE_STRING));
 
-		if ( ! f->CheckArgs(tl.Types()) )
+		if ( ! f->CheckArgs(tl.GetTypes()) )
 			rules_error("eval function parameters must be a 'signature_state' "
 			            "and a 'string' type", func);
 		}
@@ -163,24 +164,24 @@ bool RuleConditionEval::DoMatch(Rule* rule, RuleEndpointState* state,
 		return false;
 		}
 
-	if ( id->Type()->Tag() != TYPE_FUNC )
-		return id->ID_Val()->AsBool();
+	if ( id->GetType()->Tag() != zeek::TYPE_FUNC )
+		return id->GetVal()->AsBool();
 
 	// Call function with a signature_state value as argument.
 	zeek::Args args;
 	args.reserve(2);
-	args.emplace_back(AdoptRef{}, rule_matcher->BuildRuleStateValue(rule, state));
+	args.emplace_back(zeek::AdoptRef{}, rule_matcher->BuildRuleStateValue(rule, state));
 
 	if ( data )
-		args.emplace_back(make_intrusive<StringVal>(len, (const char*) data));
+		args.emplace_back(zeek::make_intrusive<zeek::StringVal>(len, (const char*) data));
 	else
-		args.emplace_back(val_mgr->EmptyString());
+		args.emplace_back(zeek::val_mgr->EmptyString());
 
 	bool result = false;
 
 	try
 		{
-		auto val = id->ID_Val()->AsFunc()->Call(args);
+		auto val = id->GetVal()->AsFunc()->Invoke(&args);
 		result = val && val->AsBool();
 		}
 

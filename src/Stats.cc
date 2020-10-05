@@ -5,7 +5,7 @@
 #include "Event.h"
 #include "Net.h"
 #include "NetVar.h"
-#include "Var.h" // for internal_type()
+#include "ID.h"
 #include "Sessions.h"
 #include "Scope.h"
 #include "DNS_Mgr.h"
@@ -13,6 +13,7 @@
 #include "threading/Manager.h"
 #include "broker/Manager.h"
 #include "input.h"
+#include "Func.h"
 
 uint64_t killed_by_inactivity = 0;
 
@@ -190,7 +191,7 @@ void ProfileLogger::Log()
 					dstats.requests, dstats.successful, dstats.failed, dstats.pending,
 					dstats.cached_hosts, dstats.cached_addresses));
 
-	trigger::Manager::Stats tstats;
+	zeek::detail::trigger::Manager::Stats tstats;
 	trigger_mgr->GetStats(&tstats);
 
 	file->Write(fmt("%.06f Triggers: total=%lu pending=%lu\n", network_time, tstats.total, tstats.pending));
@@ -239,7 +240,7 @@ void ProfileLogger::Log()
 
 	// Script-level state.
 	unsigned int size, mem = 0;
-	const auto& globals = global_scope()->Vars();
+	const auto& globals = zeek::detail::global_scope()->Vars();
 
 	if ( expensive )
 		{
@@ -251,15 +252,15 @@ void ProfileLogger::Log()
 
 		for ( const auto& global : globals )
 			{
-			ID* id = global.second.get();
+			auto& id = global.second;
 
 			// We don't show/count internal globals as they are always
 			// contained in some other global user-visible container.
 			if ( id->HasVal() )
 				{
-				Val* v = id->ID_Val();
+				const auto& v = id->GetVal();
 
-				size = id->ID_Val()->MemoryAllocation();
+				size = v->MemoryAllocation();
 				mem += size;
 
 				bool print = false;
@@ -269,7 +270,7 @@ void ProfileLogger::Log()
 				if ( size > 100 * 1024 )
 					print = true;
 
-				if ( v->Type()->Tag() == TYPE_TABLE )
+				if ( v->GetType()->Tag() == zeek::TYPE_TABLE )
 					{
 					entries = v->AsTable()->Length();
 					total_table_entries += entries;
@@ -311,16 +312,15 @@ void ProfileLogger::Log()
 	// (and for consistency we dispatch it *now*)
 	if ( profiling_update )
 		{
-		Ref(file);
 		mgr.Dispatch(new Event(profiling_update, {
-			make_intrusive<Val>(file),
-			val_mgr->Bool(expensive),
-		}));
+					zeek::make_intrusive<zeek::Val>(zeek::IntrusivePtr{zeek::NewRef{}, file}),
+					zeek::val_mgr->Bool(expensive),
+					}));
 		}
 	}
 
-void ProfileLogger::SegmentProfile(const char* name, const Location* loc,
-					double dtime, int dmem)
+void ProfileLogger::SegmentProfile(const char* name, const zeek::detail::Location* loc,
+                                   double dtime, int dmem)
 	{
 	if ( name )
 		file->Write(fmt("%.06f segment-%s dt=%.06f dmem=%d\n",
@@ -339,12 +339,12 @@ void ProfileLogger::SegmentProfile(const char* name, const Location* loc,
 
 SampleLogger::SampleLogger()
 	{
-	static TableType* load_sample_info = nullptr;
+	static zeek::TableType* load_sample_info = nullptr;
 
 	if ( ! load_sample_info )
-		load_sample_info = internal_type("load_sample_info")->AsTableType();
+		load_sample_info = zeek::id::find_type("load_sample_info")->AsTableType();
 
-	load_samples = new TableVal({NewRef{}, load_sample_info});
+	load_samples = new zeek::TableVal({zeek::NewRef{}, load_sample_info});
 	}
 
 SampleLogger::~SampleLogger()
@@ -352,29 +352,27 @@ SampleLogger::~SampleLogger()
 	Unref(load_samples);
 	}
 
-void SampleLogger::FunctionSeen(const Func* func)
+void SampleLogger::FunctionSeen(const zeek::Func* func)
 	{
-	Val* idx = new StringVal(func->Name());
-	load_samples->Assign(idx, nullptr);
-	Unref(idx);
+	auto idx = zeek::make_intrusive<zeek::StringVal>(func->Name());
+	load_samples->Assign(std::move(idx), nullptr);
 	}
 
-void SampleLogger::LocationSeen(const Location* loc)
+void SampleLogger::LocationSeen(const zeek::detail::Location* loc)
 	{
-	Val* idx = new StringVal(loc->filename);
-	load_samples->Assign(idx, nullptr);
-	Unref(idx);
+	auto idx = zeek::make_intrusive<zeek::StringVal>(loc->filename);
+	load_samples->Assign(std::move(idx), nullptr);
 	}
 
 void SampleLogger::SegmentProfile(const char* /* name */,
-					const Location* /* loc */,
-					double dtime, int dmem)
+                                  const zeek::detail::Location* /* loc */,
+                                  double dtime, int dmem)
 	{
 	if ( load_sample )
 		mgr.Enqueue(load_sample,
-			IntrusivePtr{NewRef{}, load_samples},
-			make_intrusive<IntervalVal>(dtime, Seconds),
-			val_mgr->Int(dmem)
+		            zeek::IntrusivePtr{zeek::NewRef{}, load_samples},
+		            zeek::make_intrusive<zeek::IntervalVal>(dtime, Seconds),
+		            zeek::val_mgr->Int(dmem)
 		);
 	}
 

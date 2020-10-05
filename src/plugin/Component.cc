@@ -5,7 +5,7 @@
 #include "../Desc.h"
 #include "../Reporter.h"
 
-using namespace plugin;
+using namespace zeek::plugin;
 
 Component::Component(component::Type arg_type, const std::string& arg_name)
 	{

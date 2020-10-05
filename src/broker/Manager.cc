@@ -6,6 +6,7 @@
 #include <cstring>
 #include <unistd.h>
 
+#include "Func.h"
 #include "Data.h"
 #include "Store.h"
 #include "util.h"
@@ -27,14 +28,14 @@ using namespace std;
 
 namespace bro_broker {
 
-static inline Val* get_option(const char* option)
+static inline zeek::Val* get_option(const char* option)
 	{
-	auto id = global_scope()->Lookup(option);
+	const auto& id = zeek::detail::global_scope()->Find(option);
 
-	if ( ! (id && id->ID_Val()) )
+	if ( ! (id && id->GetVal()) )
 		reporter->FatalError("Unknown Broker option %s", option);
 
-	return id->ID_Val();
+	return id->GetVal().get();
 	}
 
 class BrokerConfig : public broker::configuration {
@@ -69,7 +70,7 @@ const broker::endpoint_info Manager::NoPeer{{}, {}};
 int Manager::script_scope = 0;
 
 struct scoped_reporter_location {
-	scoped_reporter_location(Frame* frame)
+	scoped_reporter_location(zeek::detail::Frame* frame)
 		{
 		reporter->PushLocation(frame->GetCall()->GetLocationInfo());
 		}
@@ -132,7 +133,6 @@ Manager::Manager(bool arg_use_real_time)
 	peer_count = 0;
 	log_batch_size = 0;
 	log_topic_func = nullptr;
-	vector_of_data_type = nullptr;
 	log_id_type = nullptr;
 	writer_id_type = nullptr;
 	}
@@ -149,16 +149,18 @@ void Manager::InitPostScript()
 	default_log_topic_prefix =
 	    get_option("Broker::default_log_topic_prefix")->AsString()->CheckString();
 	log_topic_func = get_option("Broker::log_topic")->AsFunc();
-	log_id_type = internal_type("Log::ID")->AsEnumType();
-	writer_id_type = internal_type("Log::Writer")->AsEnumType();
+	log_id_type = zeek::id::find_type("Log::ID")->AsEnumType();
+	writer_id_type = zeek::id::find_type("Log::Writer")->AsEnumType();
+	zeek_table_manager = get_option("Broker::table_store_master")->AsBool();
+	zeek_table_db_directory = get_option("Broker::table_store_db_directory")->AsString()->CheckString();
 
-	opaque_of_data_type = new OpaqueType("Broker::Data");
-	opaque_of_set_iterator = new OpaqueType("Broker::SetIterator");
-	opaque_of_table_iterator = new OpaqueType("Broker::TableIterator");
-	opaque_of_vector_iterator = new OpaqueType("Broker::VectorIterator");
-	opaque_of_record_iterator = new OpaqueType("Broker::RecordIterator");
-	opaque_of_store_handle = new OpaqueType("Broker::Store");
-	vector_of_data_type = new VectorType({NewRef{}, internal_type("Broker::Data")});
+	opaque_of_data_type = zeek::make_intrusive<zeek::OpaqueType>("Broker::Data");
+	opaque_of_set_iterator = zeek::make_intrusive<zeek::OpaqueType>("Broker::SetIterator");
+	opaque_of_table_iterator = zeek::make_intrusive<zeek::OpaqueType>("Broker::TableIterator");
+	opaque_of_vector_iterator = zeek::make_intrusive<zeek::OpaqueType>("Broker::VectorIterator");
+	opaque_of_record_iterator = zeek::make_intrusive<zeek::OpaqueType>("Broker::RecordIterator");
+	opaque_of_store_handle = zeek::make_intrusive<zeek::OpaqueType>("Broker::Store");
+	vector_of_data_type = zeek::make_intrusive<zeek::VectorType>(zeek::id::find_type("Broker::Data"));
 
 	// Register as a "dont-count" source first, we may change that later.
 	iosource_mgr->Register(this, true);
@@ -212,6 +214,54 @@ void Manager::InitPostScript()
 		reporter->FatalError("Failed to register broker subscriber with iosource_mgr");
 	if ( ! iosource_mgr->RegisterFd(bstate->status_subscriber.fd(), this) )
 		reporter->FatalError("Failed to register broker status subscriber with iosource_mgr");
+
+	bstate->subscriber.add_topic(broker::topics::store_events, true);
+
+	InitializeBrokerStoreForwarding();
+	}
+
+void Manager::InitializeBrokerStoreForwarding()
+	{
+	const auto& globals = zeek::detail::global_scope()->Vars();
+
+	for ( const auto& global : globals )
+		{
+		auto& id = global.second;
+		if ( id->HasVal() && id->GetAttr(zeek::detail::ATTR_BACKEND) )
+			{
+			const auto& attr = id->GetAttr(zeek::detail::ATTR_BACKEND);
+			auto e = static_cast<BifEnum::Broker::BackendType>(attr->GetExpr()->Eval(nullptr)->AsEnum());
+			auto storename = std::string("___sync_store_") + global.first;
+			id->GetVal()->AsTableVal()->SetBrokerStore(storename);
+			AddForwardedStore(storename, zeek::cast_intrusive<zeek::TableVal>(id->GetVal()));
+
+			// We only create masters here. For clones, we do all the work of setting up
+			// the forwarding - but we do not try to initialize the clone. We can only initialize
+			// the clone, once a node has a connection to a master. This is currently done in scriptland
+			// in scripts/base/frameworks/cluster/broker-stores.zeek. Once the ALM transport is ready
+			// we can change over to doing this here.
+			if ( ! zeek_table_manager )
+				continue;
+
+			auto backend = bro_broker::to_backend_type(e);
+			auto suffix = ".store";
+
+			switch ( backend ) {
+			case broker::backend::sqlite:
+				suffix = ".sqlite";
+				break;
+			case broker::backend::rocksdb:
+				suffix = ".rocksdb";
+				break;
+			default:
+				break;
+			}
+
+			auto path = zeek_table_db_directory + "/" + storename + suffix;
+
+			MakeMaster(storename, backend, broker::backend_options{{"path", path}});
+			}
+		}
 	}
 
 void Manager::Terminate()
@@ -379,7 +429,7 @@ bool Manager::PublishEvent(string topic, std::string name, broker::vector args)
 	return true;
 	}
 
-bool Manager::PublishEvent(string topic, RecordVal* args)
+bool Manager::PublishEvent(string topic, zeek::RecordVal* args)
 	{
 	if ( bstate->endpoint.is_shutdown() )
 		return true;
@@ -387,18 +437,18 @@ bool Manager::PublishEvent(string topic, RecordVal* args)
 	if ( peer_count == 0 )
 		return true;
 
-	if ( ! args->Lookup(0) )
+	if ( ! args->GetField(0) )
 		return false;
 
-	auto event_name = args->Lookup(0)->AsString()->CheckString();
-	auto vv = args->Lookup(1)->AsVectorVal();
+	auto event_name = args->GetField(0)->AsString()->CheckString();
+	auto vv = args->GetField(1)->AsVectorVal();
 	broker::vector xs;
 	xs.reserve(vv->Size());
 
 	for ( auto i = 0u; i < vv->Size(); ++i )
 		{
-		auto val = vv->Lookup(i)->AsRecordVal()->Lookup(0);
-		auto data_val = static_cast<DataVal*>(val);
+		const auto& val = vv->At(i)->AsRecordVal()->GetField(0);
+		auto data_val = static_cast<DataVal*>(val.get());
 		xs.emplace_back(data_val->data);
 		}
 
@@ -413,24 +463,24 @@ bool Manager::PublishIdentifier(std::string topic, std::string id)
 	if ( peer_count == 0 )
 		return true;
 
-	ID* i = global_scope()->Lookup(id);
+	const auto& i = zeek::detail::global_scope()->Find(id);
 
 	if ( ! i )
 		return false;
 
-	auto val = i->ID_Val();
+	const auto& val = i->GetVal();
 
 	if ( ! val )
 		// Probably could have a special case to also unset the value on the
 		// receiving side, but not sure what use that would be.
 		return false;
 
-	auto data = val_to_data(val);
+	auto data = val_to_data(val.get());
 
 	if ( ! data )
 		{
 		Error("Failed to publish ID with unsupported type: %s (%s)",
-		      id.c_str(), type_name(val->Type()->Tag()));
+		      id.c_str(), zeek::type_name(val->GetType()->Tag()));
 		return false;
 		}
 
@@ -442,10 +492,10 @@ bool Manager::PublishIdentifier(std::string topic, std::string id)
 	return true;
 	}
 
-bool Manager::PublishLogCreate(EnumVal* stream, EnumVal* writer,
-			       const logging::WriterBackend::WriterInfo& info,
-			       int num_fields, const threading::Field* const * fields,
-			       const broker::endpoint_info& peer)
+bool Manager::PublishLogCreate(zeek::EnumVal* stream, zeek::EnumVal* writer,
+                               const logging::WriterBackend::WriterInfo& info,
+                               int num_fields, const threading::Field* const * fields,
+                               const broker::endpoint_info& peer)
 	{
 	if ( bstate->endpoint.is_shutdown() )
 		return true;
@@ -453,7 +503,7 @@ bool Manager::PublishLogCreate(EnumVal* stream, EnumVal* writer,
 	if ( peer_count == 0 )
 		return true;
 
-	auto stream_id = stream->Type()->AsEnumType()->Lookup(stream->AsEnum());
+	auto stream_id = stream->GetType()->AsEnumType()->Lookup(stream->AsEnum());
 
 	if ( ! stream_id )
 		{
@@ -462,7 +512,7 @@ bool Manager::PublishLogCreate(EnumVal* stream, EnumVal* writer,
 		return false;
 		}
 
-	auto writer_id = writer->Type()->AsEnumType()->Lookup(writer->AsEnum());
+	auto writer_id = writer->GetType()->AsEnumType()->Lookup(writer->AsEnum());
 
 	if ( ! writer_id )
 		{
@@ -499,7 +549,8 @@ bool Manager::PublishLogCreate(EnumVal* stream, EnumVal* writer,
 	return true;
 	}
 
-bool Manager::PublishLogWrite(EnumVal* stream, EnumVal* writer, string path, int num_fields, const threading::Value* const * vals)
+bool Manager::PublishLogWrite(zeek::EnumVal* stream, zeek::EnumVal* writer, string path,
+                              int num_fields, const threading::Value* const * vals)
 	{
 	if ( bstate->endpoint.is_shutdown() )
 		return true;
@@ -508,7 +559,7 @@ bool Manager::PublishLogWrite(EnumVal* stream, EnumVal* writer, string path, int
 		return true;
 
 	auto stream_id_num = stream->AsEnum();
-	auto stream_id = stream->Type()->AsEnumType()->Lookup(stream_id_num);
+	auto stream_id = stream->GetType()->AsEnumType()->Lookup(stream_id_num);
 
 	if ( ! stream_id )
 		{
@@ -517,7 +568,7 @@ bool Manager::PublishLogWrite(EnumVal* stream, EnumVal* writer, string path, int
 		return false;
 		}
 
-	auto writer_id = writer->Type()->AsEnumType()->Lookup(writer->AsEnum());
+	auto writer_id = writer->GetType()->AsEnumType()->Lookup(writer->AsEnum());
 
 	if ( ! writer_id )
 		{
@@ -553,8 +604,8 @@ bool Manager::PublishLogWrite(EnumVal* stream, EnumVal* writer, string path, int
 	std::string serial_data(data, len);
 	free(data);
 
-	auto v = log_topic_func->Call(IntrusivePtr{NewRef{}, stream},
-	                              make_intrusive<StringVal>(path));
+	auto v = log_topic_func->Invoke(zeek::IntrusivePtr{zeek::NewRef{}, stream},
+	                                zeek::make_intrusive<zeek::StringVal>(path));
 
 	if ( ! v )
 		{
@@ -632,21 +683,21 @@ void Manager::Error(const char* format, ...)
 	va_end(args);
 
 	if ( script_scope )
-		builtin_error(msg);
+		zeek::emit_builtin_error(msg);
 	else
 		reporter->Error("%s", msg);
 	}
 
-bool Manager::AutoPublishEvent(string topic, Val* event)
+bool Manager::AutoPublishEvent(string topic, zeek::Val* event)
 	{
-	if ( event->Type()->Tag() != TYPE_FUNC )
+	if ( event->GetType()->Tag() != zeek::TYPE_FUNC )
 		{
 		Error("Broker::auto_publish must operate on an event");
 		return false;
 		}
 
 	auto event_val = event->AsFunc();
-	if ( event_val->Flavor() != FUNC_FLAVOR_EVENT )
+	if ( event_val->Flavor() != zeek::FUNC_FLAVOR_EVENT )
 		{
 		Error("Broker::auto_publish must operate on an event");
 		return false;
@@ -666,9 +717,9 @@ bool Manager::AutoPublishEvent(string topic, Val* event)
 	return true;
 	}
 
-bool Manager::AutoUnpublishEvent(const string& topic, Val* event)
+bool Manager::AutoUnpublishEvent(const string& topic, zeek::Val* event)
 	{
-	if ( event->Type()->Tag() != TYPE_FUNC )
+	if ( event->GetType()->Tag() != zeek::TYPE_FUNC )
 		{
 		Error("Broker::auto_event_stop must operate on an event");
 		return false;
@@ -676,7 +727,7 @@ bool Manager::AutoUnpublishEvent(const string& topic, Val* event)
 
 	auto event_val = event->AsFunc();
 
-	if ( event_val->Flavor() != FUNC_FLAVOR_EVENT )
+	if ( event_val->Flavor() != zeek::FUNC_FLAVOR_EVENT )
 		{
 		Error("Broker::auto_event_stop must operate on an event");
 		return false;
@@ -698,12 +749,12 @@ bool Manager::AutoUnpublishEvent(const string& topic, Val* event)
 	return true;
 	}
 
-RecordVal* Manager::MakeEvent(val_list* args, Frame* frame)
+zeek::RecordVal* Manager::MakeEvent(val_list* args, zeek::detail::Frame* frame)
 	{
-	auto rval = new RecordVal(BifType::Record::Broker::Event);
-	auto arg_vec = new VectorVal(vector_of_data_type);
+	auto rval = new zeek::RecordVal(zeek::BifType::Record::Broker::Event);
+	auto arg_vec = zeek::make_intrusive<zeek::VectorVal>(vector_of_data_type);
 	rval->Assign(1, arg_vec);
-	Func* func = nullptr;
+	zeek::Func* func = nullptr;
 	scoped_reporter_location srl{frame};
 
 	for ( auto i = 0; i < args->length(); ++i )
@@ -714,7 +765,7 @@ RecordVal* Manager::MakeEvent(val_list* args, Frame* frame)
 			{
 			// Event val must come first.
 
-			if ( arg_val->Type()->Tag() != TYPE_FUNC )
+			if ( arg_val->GetType()->Tag() != zeek::TYPE_FUNC )
 				{
 				Error("attempt to convert non-event into an event type");
 				return rval;
@@ -722,13 +773,13 @@ RecordVal* Manager::MakeEvent(val_list* args, Frame* frame)
 
 			func = arg_val->AsFunc();
 
-			if ( func->Flavor() != FUNC_FLAVOR_EVENT )
+			if ( func->Flavor() != zeek::FUNC_FLAVOR_EVENT )
 				{
 				Error("attempt to convert non-event into an event type");
 				return rval;
 				}
 
-			auto num_args = func->FType()->Args()->NumFields();
+			auto num_args = func->GetType()->Params()->NumFields();
 
 			if ( num_args != args->length() - 1 )
 				{
@@ -737,34 +788,34 @@ RecordVal* Manager::MakeEvent(val_list* args, Frame* frame)
 				return rval;
 				}
 
-			rval->Assign(0, make_intrusive<StringVal>(func->Name()));
+			rval->Assign(0, zeek::make_intrusive<zeek::StringVal>(func->Name()));
 			continue;
 			}
 
-		auto got_type = (*args)[i]->Type();
-		auto expected_type = (*func->FType()->ArgTypes()->Types())[i - 1];
+		const auto& got_type = (*args)[i]->GetType();
+		const auto& expected_type = func->GetType()->ParamList()->GetTypes()[i - 1];
 
 		if ( ! same_type(got_type, expected_type) )
 			{
 			rval->Assign(0, nullptr);
 			Error("event parameter #%d type mismatch, got %s, expect %s", i,
-			      type_name(got_type->Tag()),
-			      type_name(expected_type->Tag()));
+			      zeek::type_name(got_type->Tag()),
+			      zeek::type_name(expected_type->Tag()));
 			return rval;
 			}
 
-		IntrusivePtr<RecordVal> data_val;
+		zeek::RecordValPtr data_val;
 
 		if ( same_type(got_type, bro_broker::DataVal::ScriptDataType()) )
-			data_val = {NewRef{}, (*args)[i]->AsRecordVal()};
+			data_val = {zeek::NewRef{}, (*args)[i]->AsRecordVal()};
 		else
 			data_val = make_data_val((*args)[i]);
 
-		if ( ! data_val->Lookup(0) )
+		if ( ! data_val->GetField(0) )
 			{
 			rval->Assign(0, nullptr);
 			Error("failed to convert param #%d of type %s to broker data",
-				  i, type_name(got_type->Tag()));
+				  i, zeek::type_name(got_type->Tag()));
 			return rval;
 			}
 
@@ -871,7 +922,8 @@ void Manager::Process()
 	{
 	// Ensure that time gets update before processing broker messages, or events
 	// based on them might get scheduled wrong.
-	net_update_time(current_time());
+	if ( use_real_time )
+		net_update_time(current_time());
 
 	bool had_input = false;
 
@@ -903,11 +955,22 @@ void Manager::Process()
 		had_input = true;
 
 		auto& topic = broker::get_topic(message);
-		auto& msg = broker::get_data(message);
+
+		if ( broker::topics::store_events.prefix_of(topic) )
+			{
+			ProcessStoreEvent(broker::move_data(message));
+			continue;
+			}
 
 		try
 			{
-			DispatchMessage(topic, std::move(msg));
+			// Once we call a broker::move_* function, we force Broker to
+			// unshare the content of the message, i.e., copy the content to a
+			// different memory region if other threads keep references to the
+			// message. Since `topic` still points into the original memory
+			// region, we may no longer access it after this point.
+			auto unshared_topic = broker::move_topic(message);
+			DispatchMessage(unshared_topic, broker::move_data(message));
 			}
 		catch ( std::runtime_error& e )
 			{
@@ -940,6 +1003,140 @@ void Manager::Process()
 		}
 	}
 
+void Manager::ProcessStoreEventInsertUpdate(const zeek::TableValPtr& table,
+                                            const std::string& store_id,
+                                            const broker::data& key,
+                                            const broker::data& data,
+                                            const broker::data& old_value,
+                                            bool insert)
+		{
+		auto type = "Insert";
+		if ( ! insert )
+			type = "Update";
+
+		if ( insert )
+			{
+			DBG_LOG(DBG_BROKER, "Store %s: Insert: %s:%s (%s:%s)", store_id.c_str(), to_string(key).c_str(), to_string(data).c_str(), key.get_type_name(), data.get_type_name());
+			}
+		else
+			{
+			DBG_LOG(DBG_BROKER, "Store %s: Update: %s->%s (%s)", store_id.c_str(), to_string(old_value).c_str(), to_string(data).c_str(), data.get_type_name());
+			}
+
+		if ( table->GetType()->IsSet() && data.get_type() != broker::data::type::none )
+			{
+			reporter->Error("ProcessStoreEvent %s got %s when expecting set", type, data.get_type_name());
+			return;
+			}
+
+		const auto& its = table->GetType()->AsTableType()->GetIndexTypes();
+		assert( its.size() == 1 );
+		auto zeek_key = data_to_val(key, its[0].get());
+		if ( ! zeek_key )
+			{
+			reporter->Error("ProcessStoreEvent %s: could not convert key \"%s\" for store \"%s\" while receiving remote data. This probably means the tables have different types on different nodes.", type, to_string(key).c_str(), store_id.c_str());
+			return;
+			}
+
+		if ( table->GetType()->IsSet() )
+			{
+			table->Assign(zeek_key, nullptr, false);
+			return;
+			}
+
+		// it is a table
+		auto zeek_value = data_to_val(data, table->GetType()->Yield().get());
+		if ( ! zeek_value )
+			{
+			reporter->Error("ProcessStoreEvent %s: could not convert value \"%s\" for key \"%s\" in store \"%s\" while receiving remote data. This probably means the tables have different types on different nodes.", type, to_string(data).c_str(), to_string(key).c_str(), store_id.c_str());
+			return;
+			}
+
+		table->Assign(zeek_key, zeek_value, false);
+		}
+
+void Manager::ProcessStoreEvent(broker::data msg)
+	{
+	if ( auto insert = broker::store_event::insert::make(msg) )
+		{
+		auto storehandle = broker_mgr->LookupStore(insert.store_id());
+		if ( ! storehandle )
+			return;
+
+		const auto& table = storehandle->forward_to;
+		if ( ! table )
+			return;
+
+		// We sent this message. Ignore it.
+		if ( insert.publisher() == storehandle->store_pid )
+			return;
+
+		ProcessStoreEventInsertUpdate(table, insert.store_id(), insert.key(), insert.value(), {}, true);
+	}
+	else if ( auto update = broker::store_event::update::make(msg) )
+		{
+		auto storehandle = broker_mgr->LookupStore(update.store_id());
+		if ( ! storehandle )
+			return;
+
+		const auto& table = storehandle->forward_to;
+		if ( ! table )
+			return;
+
+		// We sent this message. Ignore it.
+		if ( update.publisher() == storehandle->store_pid )
+			return;
+
+		ProcessStoreEventInsertUpdate(table, update.store_id(), update.key(), update.new_value(), update.old_value(), false);
+		}
+	else if ( auto erase = broker::store_event::erase::make(msg) )
+		{
+		auto storehandle = broker_mgr->LookupStore(erase.store_id());
+		if ( ! storehandle )
+			return;
+
+		auto table = storehandle->forward_to;
+		if ( ! table )
+			return;
+
+		// We sent this message. Ignore it.
+		if ( erase.publisher() == storehandle->store_pid )
+			return;
+
+		auto key = erase.key();
+		DBG_LOG(DBG_BROKER, "Store %s: Erase key %s", erase.store_id().c_str(), to_string(key).c_str());
+		const auto& its = table->GetType()->AsTableType()->GetIndexTypes();
+		assert( its.size() == 1 );
+		auto zeek_key = data_to_val(key, its[0].get());
+		if ( ! zeek_key )
+			{
+			reporter->Error("ProcessStoreEvent: could not convert key \"%s\" for store \"%s\" while receiving remote erase. This probably means the tables have different types on different nodes.", to_string(key).c_str(), insert.store_id().c_str());
+			return;
+			}
+
+		table->Remove(*zeek_key, false);
+		}
+	else if ( auto expire = broker::store_event::expire::make(msg) )
+		{
+		// We just ignore expiries - expiring information on the Zeek side is handled by Zeek itself.
+#ifdef DEBUG
+		// let's only debug log for stores that we know.
+		auto storehandle = broker_mgr->LookupStore(expire.store_id());
+		if ( ! storehandle )
+			return;
+
+		auto table = storehandle->forward_to;
+		if ( ! table )
+			return;
+
+		DBG_LOG(DBG_BROKER, "Store %s: Store expired key %s", expire.store_id().c_str(), to_string(expire.key()).c_str());
+#endif /* DEBUG */
+		}
+	else
+		{
+		reporter->Error("ProcessStoreEvent: Unhandled event type");
+		}
+	}
 
 void Manager::ProcessEvent(const broker::topic& topic, broker::zeek::Event ev)
 	{
@@ -978,13 +1175,13 @@ void Manager::ProcessEvent(const broker::topic& topic, broker::zeek::Event ev)
 		return;
 		}
 
-	auto arg_types = handler->FType(false)->ArgTypes()->Types();
+	const auto& arg_types = handler->GetType(false)->ParamList()->GetTypes();
 
-	if ( static_cast<size_t>(arg_types->length()) != args.size() )
+	if ( arg_types.size() != args.size() )
 		{
 		reporter->Warning("got event message '%s' with invalid # of args,"
-				  " got %zd, expected %d", name.data(), args.size(),
-				  arg_types->length());
+		                  " got %zd, expected %zu", name.data(), args.size(),
+		                  arg_types.size());
 		return;
 		}
 
@@ -994,14 +1191,14 @@ void Manager::ProcessEvent(const broker::topic& topic, broker::zeek::Event ev)
 	for ( auto i = 0u; i < args.size(); ++i )
 		{
 		auto got_type = args[i].get_type_name();
-		auto expected_type = (*arg_types)[i];
-		auto val = data_to_val(std::move(args[i]), expected_type);
+		const auto& expected_type = arg_types[i];
+		auto val = data_to_val(std::move(args[i]), expected_type.get());
 
 		if ( val )
 			vl.emplace_back(std::move(val));
 		else
 			{
-			auto expected_name = type_name(expected_type->Tag());
+			auto expected_name = zeek::type_name(expected_type->Tag());
 
 			reporter->Warning("failed to convert remote event '%s' arg #%d,"
 					  " got %s, expected %s",
@@ -1078,14 +1275,13 @@ bool bro_broker::Manager::ProcessLogCreate(broker::zeek::LogCreate lc)
 			}
 		}
 
-	if ( ! log_mgr->CreateWriterForRemoteLog(stream_id->AsEnumVal(), writer_id->AsEnumVal(), writer_info.get(), num_fields, fields) )
+	if ( ! log_mgr->CreateWriterForRemoteLog(stream_id->AsEnumVal(), writer_id->AsEnumVal(), writer_info.release(), num_fields, fields) )
 		{
 		ODesc d;
 		stream_id->Describe(&d);
 		reporter->Warning("failed to create remote log stream for %s locally", d.Description());
 		}
 
-	writer_info.release(); // log_mgr took ownership.
 	return true;
 	}
 
@@ -1187,7 +1383,7 @@ bool Manager::ProcessIdentifierUpdate(broker::zeek::IdentifierUpdate iu)
 	++statistics.num_ids_incoming;
 	auto id_name = std::move(iu.id_name());
 	auto id_value = std::move(iu.id_value());
-	auto id = global_scope()->Lookup(id_name);
+	const auto& id = zeek::detail::global_scope()->Find(id_name);
 
 	if ( ! id )
 		{
@@ -1196,12 +1392,12 @@ bool Manager::ProcessIdentifierUpdate(broker::zeek::IdentifierUpdate iu)
 		return false;
 		}
 
-	auto val = data_to_val(std::move(id_value), id->Type());
+	auto val = data_to_val(std::move(id_value), id->GetType().get());
 
 	if ( ! val )
 		{
 		reporter->Error("Failed to receive ID with unsupported type: %s (%s)",
-		                id_name.c_str(), type_name(id->Type()->Tag()));
+		                id_name.c_str(), zeek::type_name(id->GetType()->Tag()));
 		return false;
 		}
 
@@ -1246,33 +1442,33 @@ void Manager::ProcessStatus(broker::status stat)
 	if ( ! event )
 		return;
 
-	auto ei = internal_type("Broker::EndpointInfo")->AsRecordType();
-	auto endpoint_info = make_intrusive<RecordVal>(ei);
+	static auto ei = zeek::id::find_type<zeek::RecordType>("Broker::EndpointInfo");
+	auto endpoint_info = zeek::make_intrusive<zeek::RecordVal>(ei);
 
 	if ( ctx )
 		{
-		endpoint_info->Assign(0, make_intrusive<StringVal>(to_string(ctx->node)));
-		auto ni = internal_type("Broker::NetworkInfo")->AsRecordType();
-		auto network_info = make_intrusive<RecordVal>(ni);
+		endpoint_info->Assign(0, zeek::make_intrusive<zeek::StringVal>(to_string(ctx->node)));
+		static auto ni = zeek::id::find_type<zeek::RecordType>("Broker::NetworkInfo");
+		auto network_info = zeek::make_intrusive<zeek::RecordVal>(ni);
 
 		if ( ctx->network )
 			{
-			network_info->Assign(0, make_intrusive<StringVal>(ctx->network->address.data()));
-			network_info->Assign(1, val_mgr->Port(ctx->network->port, TRANSPORT_TCP));
+			network_info->Assign(0, zeek::make_intrusive<zeek::StringVal>(ctx->network->address.data()));
+			network_info->Assign(1, zeek::val_mgr->Port(ctx->network->port, TRANSPORT_TCP));
 			}
 		else
 			{
 			// TODO: are there any status messages where the ctx->network
 			// is not set and actually could be?
-			network_info->Assign(0, make_intrusive<StringVal>("<unknown>"));
-			network_info->Assign(1, val_mgr->Port(0, TRANSPORT_TCP));
+			network_info->Assign(0, zeek::make_intrusive<zeek::StringVal>("<unknown>"));
+			network_info->Assign(1, zeek::val_mgr->Port(0, TRANSPORT_TCP));
 			}
 
 		endpoint_info->Assign(1, std::move(network_info));
 		}
 
 	auto str = stat.message();
-	auto msg = make_intrusive<StringVal>(str ? *str : "");
+	auto msg = zeek::make_intrusive<zeek::StringVal>(str ? *str : "");
 
 	mgr.Enqueue(event, std::move(endpoint_info), std::move(msg));
 	}
@@ -1289,61 +1485,17 @@ void Manager::ProcessError(broker::error err)
 
 	if ( err.category() == caf::atom("broker") )
 		{
-		msg = caf::to_string(err.context());
+		static auto enum_type = zeek::id::find_type<zeek::EnumType>("Broker::ErrorCode");
 
-		switch ( static_cast<broker::ec>(err.code()) ) {
-		case broker::ec::peer_incompatible:
-			ec = BifEnum::Broker::ErrorCode::PEER_INCOMPATIBLE;
-			break;
-
-		case broker::ec::peer_invalid:
-			ec = BifEnum::Broker::ErrorCode::PEER_INVALID;
-			break;
-
-		case broker::ec::peer_unavailable:
-			ec = BifEnum::Broker::ErrorCode::PEER_UNAVAILABLE;
-			break;
-
-		case broker::ec::peer_timeout:
-			ec = BifEnum::Broker::ErrorCode::PEER_TIMEOUT;
-			break;
-
-		case broker::ec::master_exists:
-			ec = BifEnum::Broker::ErrorCode::MASTER_EXISTS;
-			break;
-
-		case broker::ec::no_such_master:
-			ec = BifEnum::Broker::ErrorCode::NO_SUCH_MASTER;
-			break;
-
-		case broker::ec::no_such_key:
-			ec = BifEnum::Broker::ErrorCode::NO_SUCH_KEY;
-			break;
-
-		case broker::ec::request_timeout:
-			ec = BifEnum::Broker::ErrorCode::REQUEST_TIMEOUT;
-			break;
-
-		case broker::ec::type_clash:
-			ec = BifEnum::Broker::ErrorCode::TYPE_CLASH;
-			break;
-
-		case broker::ec::invalid_data:
-			ec = BifEnum::Broker::ErrorCode::INVALID_DATA;
-			break;
-
-		case broker::ec::backend_failure:
-			ec = BifEnum::Broker::ErrorCode::BACKEND_FAILURE;
-			break;
-
-		case broker::ec::stale_data:
-			ec = BifEnum::Broker::ErrorCode::STALE_DATA;
-			break;
-
-		case broker::ec::unspecified: // fall-through
-		default:
+		if ( enum_type->Lookup(err.code()) )
+			ec = static_cast<BifEnum::Broker::ErrorCode>(err.code());
+		else
+			{
+			reporter->Warning("Unknown Broker error code %u: mapped to unspecificed enum value ", err.code());
 			ec = BifEnum::Broker::ErrorCode::UNSPECIFIED;
-		}
+			}
+
+		msg = caf::to_string(err.context());
 		}
 	else
 		{
@@ -1352,8 +1504,8 @@ void Manager::ProcessError(broker::error err)
 		}
 
 	mgr.Enqueue(Broker::error,
-		BifType::Enum::Broker::ErrorCode->GetVal(ec),
-		make_intrusive<StringVal>(msg)
+		zeek::BifType::Enum::Broker::ErrorCode->GetEnumVal(ec),
+	            zeek::make_intrusive<zeek::StringVal>(msg)
 	);
 	}
 
@@ -1449,14 +1601,74 @@ StoreHandleVal* Manager::MakeMaster(const string& name, broker::backend type,
 
 	data_stores.emplace(name, handle);
 	iosource_mgr->RegisterFd(handle->proxy.mailbox().descriptor(), this);
+	PrepareForwarding(name);
 
-	if ( bstate->endpoint.use_real_time() )
-		return handle;
+	if ( ! bstate->endpoint.use_real_time() )
+		// Wait for master to become available/responsive.
+		// Possibly avoids timeouts in scripts during unit tests.
+		handle->store.exists("");
 
-	// Wait for master to become available/responsive.
-	// Possibly avoids timeouts in scripts during unit tests.
-	handle->store.exists("");
+	BrokerStoreToZeekTable(name, handle);
+
 	return handle;
+	}
+
+void Manager::BrokerStoreToZeekTable(const std::string& name, const StoreHandleVal* handle)
+	{
+	if ( ! handle->forward_to )
+		return;
+
+	auto keys = handle->store.keys();
+	if ( ! keys )
+		return;
+
+	auto set = caf::get_if<broker::set>(&(keys->get_data()));
+	auto table = handle->forward_to;
+	const auto& its = table->GetType()->AsTableType()->GetIndexTypes();
+	bool is_set = table->GetType()->IsSet();
+	assert( its.size() == 1 );
+
+	// disable &on_change notifications while filling the table.
+	table->DisableChangeNotifications();
+
+	for ( const auto& key : *set )
+		{
+		auto zeek_key = data_to_val(key, its[0].get());
+		if ( ! zeek_key )
+			{
+			reporter->Error("Failed to convert key \"%s\" while importing broker store to table for store \"%s\". Aborting import.", to_string(key).c_str(), name.c_str());
+			// just abort - this probably means the types are incompatible
+			table->EnableChangeNotifications();
+			return;
+			}
+
+		if ( is_set )
+			{
+			table->Assign(zeek_key, nullptr, false);
+			continue;
+			}
+
+		auto value = handle->store.get(key);
+		if ( ! value )
+			{
+			reporter->Error("Failed to load value for key %s while importing Broker store %s to table", to_string(key).c_str(), name.c_str());
+			table->EnableChangeNotifications();
+			continue;
+			}
+
+		auto zeek_value = data_to_val(*value, table->GetType()->Yield().get());
+		if ( ! zeek_value )
+			{
+			reporter->Error("Could not convert %s to table value while trying to import Broker store %s. Aborting import.", to_string(value).c_str(), name.c_str());
+			table->EnableChangeNotifications();
+			return;
+			}
+
+		table->Assign(zeek_key, zeek_value, false);
+		}
+
+	table->EnableChangeNotifications();
+	return;
 	}
 
 StoreHandleVal* Manager::MakeClone(const string& name, double resync_interval,
@@ -1486,7 +1698,7 @@ StoreHandleVal* Manager::MakeClone(const string& name, double resync_interval,
 
 	data_stores.emplace(name, handle);
 	iosource_mgr->RegisterFd(handle->proxy.mailbox().descriptor(), this);
-
+	PrepareForwarding(name);
 	return handle;
 	}
 
@@ -1544,6 +1756,34 @@ const Stats& Manager::GetStatistics()
 	// The other attributes are set as activity happens.
 
 	return statistics;
+	}
+
+bool Manager::AddForwardedStore(const std::string& name, zeek::TableValPtr table)
+	{
+	if ( forwarded_stores.find(name) != forwarded_stores.end() )
+		{
+		reporter->Error("same &broker_store %s specified for two different variables", name.c_str());
+		return false;
+		}
+
+	DBG_LOG(DBG_BROKER, "Adding table forward for data store %s", name.c_str());
+	forwarded_stores.emplace(name, std::move(table));
+
+	PrepareForwarding(name);
+	return true;
+	}
+
+void Manager::PrepareForwarding(const std::string &name)
+	{
+	auto handle = LookupStore(name);
+	if ( ! handle )
+		return;
+
+	if ( forwarded_stores.find(name) == forwarded_stores.end() )
+		return;
+
+	handle->forward_to = forwarded_stores.at(name);
+	DBG_LOG(DBG_BROKER, "Resolved table forward for data store %s", name.c_str());
 	}
 
 } // namespace bro_broker

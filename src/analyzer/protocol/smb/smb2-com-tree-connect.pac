@@ -3,10 +3,10 @@ refine connection SMB_Conn += {
 	function proc_smb2_tree_connect_request(header: SMB2_Header, val: SMB2_tree_connect_request): bool
 		%{
 		if ( smb2_tree_connect_request )
-			BifEvent::enqueue_smb2_tree_connect_request(bro_analyzer(),
+			zeek::BifEvent::enqueue_smb2_tree_connect_request(bro_analyzer(),
 			                                            bro_analyzer()->Conn(),
-			                                            {AdoptRef{}, BuildSMB2HeaderVal(header)},
-			                                            {AdoptRef{}, smb2_string2stringval(${val.path})});
+			                                            BuildSMB2HeaderVal(header),
+			                                            smb2_string2stringval(${val.path}));
 
 		return true;
 		%}
@@ -18,13 +18,13 @@ refine connection SMB_Conn += {
 
 		if ( smb2_tree_connect_response )
 			{
-			auto resp = make_intrusive<RecordVal>(BifType::Record::SMB2::TreeConnectResponse);
-			resp->Assign(0, val_mgr->Count(${val.share_type}));
+			auto resp = zeek::make_intrusive<zeek::RecordVal>(zeek::BifType::Record::SMB2::TreeConnectResponse);
+			resp->Assign(0, zeek::val_mgr->Count(${val.share_type}));
 
-			BifEvent::enqueue_smb2_tree_connect_response(bro_analyzer(),
+			zeek::BifEvent::enqueue_smb2_tree_connect_response(bro_analyzer(),
 			                                             bro_analyzer()->Conn(),
-			                                             {AdoptRef{}, BuildSMB2HeaderVal(header)},
-														 std::move(resp));
+			                                             BuildSMB2HeaderVal(header),
+			                                             std::move(resp));
 			}
 
 		return true;
@@ -54,4 +54,3 @@ type SMB2_tree_connect_response(header: SMB2_Header) = record {
 } &let {
 	proc: bool = $context.connection.proc_smb2_tree_connect_response(header, this);
 };
-
