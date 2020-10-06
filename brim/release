@@ -87,7 +87,7 @@ if [ "$OS" = Windows_NT ]; then
 fi
 $sudo zkg install --force hassh --version cfa2315257eaa972e86f7fcd694712e0d32762ff
 $sudo zkg install --force ja3 --version 133f2a128b873f9c40e4e65c2b9dc372a801cf24
-$sudo zkg install --force geoip-conn --version 73c8ab445112585195de9a3b2cd1140b68c367b4
+$sudo zkg install --force geoip-conn --version f8c66962d15a09052ab64a6413c1eadcb23e4ca2
 
 #
 # Create zip file.
