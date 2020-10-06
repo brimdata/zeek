@@ -14,11 +14,12 @@
 #include "../Reporter.h"
 #include "../Func.h"
 #include "../Event.h"
+#include "../Val.h"
 #include "../util.h"
 #include "../input.h"
 
 using namespace std;
-using namespace plugin;
+using namespace zeek::plugin;
 
 Plugin* Manager::current_plugin = nullptr;
 const char* Manager::current_dir = nullptr;
@@ -514,28 +515,22 @@ static bool hook_cmp(std::pair<int, Plugin*> a, std::pair<int, Plugin*> b)
 	return a.first > b.first;
 	}
 
-std::list<std::pair<HookType, int> > Manager::HooksEnabledForPlugin(const Plugin* plugin) const
+std::list<std::pair<zeek::plugin::HookType, int> > Manager::HooksEnabledForPlugin(const Plugin* plugin) const
 	{
-	std::list<std::pair<HookType, int> > enabled;
+	std::list<std::pair<zeek::plugin::HookType, int> > enabled;
 
 	for ( int i = 0; i < NUM_HOOKS; i++ )
 		{
-		hook_list* l = hooks[i];
-
-		if ( ! l )
-			continue;
-
-		for ( hook_list::iterator j = l->begin(); j != l->end(); j++ )
-			{
-			if ( (*j).second == plugin )
-				enabled.push_back(std::make_pair((HookType)i, (*j).first));
-			}
+		if ( hook_list* l = hooks[i] )
+			for ( const auto& [hook, hook_plugin] : *l )
+				if ( hook_plugin == plugin )
+					enabled.push_back(std::make_pair(static_cast<zeek::plugin::HookType>(i), hook));
 		}
 
 	return enabled;
 	}
 
-void Manager::EnableHook(HookType hook, Plugin* plugin, int prio)
+void Manager::EnableHook(zeek::plugin::HookType hook, Plugin* plugin, int prio)
 	{
 	if ( ! hooks[hook] )
 		hooks[hook] = new hook_list;
@@ -553,7 +548,7 @@ void Manager::EnableHook(HookType hook, Plugin* plugin, int prio)
 	l->sort(hook_cmp);
 	}
 
-void Manager::DisableHook(HookType hook, Plugin* plugin)
+void Manager::DisableHook(zeek::plugin::HookType hook, Plugin* plugin)
 	{
 	hook_list* l = hooks[hook];
 
@@ -583,7 +578,7 @@ void Manager::RequestEvent(EventHandlerPtr handler, Plugin* plugin)
 	handler->SetGenerateAlways();
 	}
 
-void Manager::RequestBroObjDtor(BroObj* obj, Plugin* plugin)
+void Manager::RequestBroObjDtor(Obj* obj, Plugin* plugin)
 	{
 	obj->NotifyPluginsOnDtor();
 	}
@@ -592,15 +587,15 @@ int Manager::HookLoadFile(const Plugin::LoadType type, const string& file, const
 	{
 	HookArgumentList args;
 
-	if ( HavePluginForHook(META_HOOK_PRE) )
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_PRE) )
 		{
 		args.push_back(HookArgument(type));
 		args.push_back(HookArgument(file));
 		args.push_back(HookArgument(resolved));
-		MetaHookPre(HOOK_LOAD_FILE, args);
+		MetaHookPre(zeek::plugin::HOOK_LOAD_FILE, args);
 		}
 
-	hook_list* l = hooks[HOOK_LOAD_FILE];
+	hook_list* l = hooks[zeek::plugin::HOOK_LOAD_FILE];
 
 	int rc = -1;
 
@@ -615,72 +610,67 @@ int Manager::HookLoadFile(const Plugin::LoadType type, const string& file, const
 				break;
 			}
 
-	if ( HavePluginForHook(META_HOOK_POST) )
-		MetaHookPost(HOOK_LOAD_FILE, args, HookArgument(rc));
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_POST) )
+		MetaHookPost(zeek::plugin::HOOK_LOAD_FILE, args, HookArgument(rc));
 
 	return rc;
 	}
 
-std::pair<bool, Val*> Manager::HookCallFunction(const Func* func, Frame* parent, const zeek::Args& vecargs) const
+std::pair<bool, zeek::ValPtr>
+Manager::HookCallFunction(const zeek::Func* func, zeek::detail::Frame* parent,
+                          zeek::Args* vecargs) const
 	{
 	HookArgumentList args;
-	std::optional<val_list> vargs;
+	val_list vargs;
 
-	if ( HavePluginForHook(META_HOOK_PRE) )
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_PRE) )
 		{
-		vargs = val_list(vecargs.size());
+		vargs.resize(vecargs->size());
 
-		for ( const auto& v : vecargs )
-			vargs->push_back(v.get());
+		for ( const auto& v : *vecargs )
+			vargs.push_back(v.get());
 
 		args.push_back(HookArgument(func));
 		args.push_back(HookArgument(parent));
-		args.push_back(HookArgument(&vargs.value()));
-		MetaHookPre(HOOK_CALL_FUNCTION, args);
+		args.push_back(HookArgument(&vargs));
+		MetaHookPre(zeek::plugin::HOOK_CALL_FUNCTION, args);
 		}
 
-	hook_list* l = hooks[HOOK_CALL_FUNCTION];
+	hook_list* l = hooks[zeek::plugin::HOOK_CALL_FUNCTION];
 
-	std::pair<bool, Val*> v = std::pair<bool, Val*>(false, NULL);
+	std::pair<bool, zeek::ValPtr> rval{false, nullptr};
 
 	if ( l )
 		{
-		if ( ! vargs )
-			{
-			vargs = val_list(vecargs.size());
-
-			for ( const auto& v : vecargs )
-				vargs->push_back(v.get());
-			}
-
 		for ( hook_list::iterator i = l->begin(); i != l->end(); ++i )
 			{
 			Plugin* p = (*i).second;
 
-			v = p->HookCallFunction(func, parent, &vargs.value());
+			rval = p->HookFunctionCall(func, parent, vecargs);
 
-			if ( v.first )
+			if ( rval.first )
 				break;
 			}
 		}
 
-	if ( HavePluginForHook(META_HOOK_POST) )
-		MetaHookPost(HOOK_CALL_FUNCTION, args, HookArgument(v));
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_POST) )
+		MetaHookPost(zeek::plugin::HOOK_CALL_FUNCTION, args,
+		             HookArgument(std::make_pair(rval.first, rval.second.get())));
 
-	return v;
+	return rval;
 	}
 
 bool Manager::HookQueueEvent(Event* event) const
 	{
 	HookArgumentList args;
 
-	if ( HavePluginForHook(META_HOOK_PRE) )
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_PRE) )
 		{
 		args.push_back(HookArgument(event));
-		MetaHookPre(HOOK_QUEUE_EVENT, args);
+		MetaHookPre(zeek::plugin::HOOK_QUEUE_EVENT, args);
 		}
 
-	hook_list* l = hooks[HOOK_QUEUE_EVENT];
+	hook_list* l = hooks[zeek::plugin::HOOK_QUEUE_EVENT];
 
 	bool result = false;
 
@@ -696,8 +686,8 @@ bool Manager::HookQueueEvent(Event* event) const
 				}
 			}
 
-	if ( HavePluginForHook(META_HOOK_POST) )
-		MetaHookPost(HOOK_QUEUE_EVENT, args, HookArgument(result));
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_POST) )
+		MetaHookPost(zeek::plugin::HOOK_QUEUE_EVENT, args, HookArgument(result));
 
 	return result;
 	}
@@ -706,10 +696,10 @@ void Manager::HookDrainEvents() const
 	{
 	HookArgumentList args;
 
-	if ( HavePluginForHook(META_HOOK_PRE) )
-		MetaHookPre(HOOK_DRAIN_EVENTS, args);
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_PRE) )
+		MetaHookPre(zeek::plugin::HOOK_DRAIN_EVENTS, args);
 
-	hook_list* l = hooks[HOOK_DRAIN_EVENTS];
+	hook_list* l = hooks[zeek::plugin::HOOK_DRAIN_EVENTS];
 
 	if ( l )
 		for ( hook_list::iterator i = l->begin(); i != l->end(); ++i )
@@ -718,8 +708,8 @@ void Manager::HookDrainEvents() const
 			p->HookDrainEvents();
 			}
 
-	if ( HavePluginForHook(META_HOOK_POST) )
-		MetaHookPost(HOOK_DRAIN_EVENTS, args, HookArgument());
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_POST) )
+		MetaHookPost(zeek::plugin::HOOK_DRAIN_EVENTS, args, HookArgument());
 
 	}
 
@@ -727,13 +717,13 @@ void Manager::HookSetupAnalyzerTree(Connection *conn) const
 	{
 	HookArgumentList args;
 
-	if ( HavePluginForHook(META_HOOK_PRE) )
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_PRE) )
 		{
 		args.push_back(HookArgument(conn));
-		MetaHookPre(HOOK_SETUP_ANALYZER_TREE, args);
+		MetaHookPre(zeek::plugin::HOOK_SETUP_ANALYZER_TREE, args);
 		}
 
-	hook_list *l = hooks[HOOK_SETUP_ANALYZER_TREE];
+	hook_list *l = hooks[zeek::plugin::HOOK_SETUP_ANALYZER_TREE];
 
 	if ( l )
 		{
@@ -744,9 +734,9 @@ void Manager::HookSetupAnalyzerTree(Connection *conn) const
 			}
 		}
 
-	if ( HavePluginForHook(META_HOOK_POST) )
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_POST) )
 		{
-		MetaHookPost(HOOK_SETUP_ANALYZER_TREE, args, HookArgument());
+		MetaHookPost(zeek::plugin::HOOK_SETUP_ANALYZER_TREE, args, HookArgument());
 		}
 	}
 
@@ -754,13 +744,13 @@ void Manager::HookUpdateNetworkTime(double network_time) const
 	{
 	HookArgumentList args;
 
-	if ( HavePluginForHook(META_HOOK_PRE) )
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_PRE) )
 		{
 		args.push_back(HookArgument(network_time));
-		MetaHookPre(HOOK_UPDATE_NETWORK_TIME, args);
+		MetaHookPre(zeek::plugin::HOOK_UPDATE_NETWORK_TIME, args);
 		}
 
-	hook_list* l = hooks[HOOK_UPDATE_NETWORK_TIME];
+	hook_list* l = hooks[zeek::plugin::HOOK_UPDATE_NETWORK_TIME];
 
 	if ( l )
 		for ( hook_list::iterator i = l->begin(); i != l->end(); ++i )
@@ -769,21 +759,21 @@ void Manager::HookUpdateNetworkTime(double network_time) const
 			p->HookUpdateNetworkTime(network_time);
 			}
 
-	if ( HavePluginForHook(META_HOOK_POST) )
-		MetaHookPost(HOOK_UPDATE_NETWORK_TIME, args, HookArgument());
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_POST) )
+		MetaHookPost(zeek::plugin::HOOK_UPDATE_NETWORK_TIME, args, HookArgument());
 	}
 
 void Manager::HookBroObjDtor(void* obj) const
 	{
 	HookArgumentList args;
 
-	if ( HavePluginForHook(META_HOOK_PRE) )
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_PRE) )
 		{
 		args.push_back(HookArgument(obj));
-		MetaHookPre(HOOK_BRO_OBJ_DTOR, args);
+		MetaHookPre(zeek::plugin::HOOK_BRO_OBJ_DTOR, args);
 		}
 
-	hook_list* l = hooks[HOOK_BRO_OBJ_DTOR];
+	hook_list* l = hooks[zeek::plugin::HOOK_BRO_OBJ_DTOR];
 
 	if ( l )
 		for ( hook_list::iterator i = l->begin(); i != l->end(); ++i )
@@ -792,8 +782,8 @@ void Manager::HookBroObjDtor(void* obj) const
 			p->HookBroObjDtor(obj);
 			}
 
-	if ( HavePluginForHook(META_HOOK_POST) )
-		MetaHookPost(HOOK_BRO_OBJ_DTOR, args, HookArgument());
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_POST) )
+		MetaHookPost(zeek::plugin::HOOK_BRO_OBJ_DTOR, args, HookArgument());
 	}
 
 void Manager::HookLogInit(const std::string& writer,
@@ -805,7 +795,7 @@ void Manager::HookLogInit(const std::string& writer,
 	{
 	HookArgumentList args;
 
-	if ( HavePluginForHook(META_HOOK_PRE) )
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_PRE) )
 		{
 		args.push_back(HookArgument(writer));
 		args.push_back(HookArgument(instantiating_filter));
@@ -814,10 +804,10 @@ void Manager::HookLogInit(const std::string& writer,
 		args.push_back(HookArgument(&info));
 		args.push_back(HookArgument(num_fields));
 		args.push_back(HookArgument(std::make_pair(num_fields, fields)));
-		MetaHookPre(HOOK_LOG_INIT, args);
+		MetaHookPre(zeek::plugin::HOOK_LOG_INIT, args);
 		}
 
-	hook_list* l = hooks[HOOK_LOG_INIT];
+	hook_list* l = hooks[zeek::plugin::HOOK_LOG_INIT];
 
 	if ( l )
 		for ( hook_list::iterator i = l->begin(); i != l->end(); ++i )
@@ -827,8 +817,8 @@ void Manager::HookLogInit(const std::string& writer,
 			               num_fields, fields);
 			}
 
-	if ( HavePluginForHook(META_HOOK_POST) )
-		MetaHookPost(HOOK_LOG_INIT, args, HookArgument());
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_POST) )
+		MetaHookPost(zeek::plugin::HOOK_LOG_INIT, args, HookArgument());
 	}
 
 bool Manager::HookLogWrite(const std::string& writer,
@@ -840,7 +830,7 @@ bool Manager::HookLogWrite(const std::string& writer,
 	{
 	HookArgumentList args;
 
-	if ( HavePluginForHook(META_HOOK_PRE) )
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_PRE) )
 		{
 		args.push_back(HookArgument(writer));
 		args.push_back(HookArgument(filter));
@@ -848,10 +838,10 @@ bool Manager::HookLogWrite(const std::string& writer,
 		args.push_back(HookArgument(num_fields));
 		args.push_back(HookArgument(std::make_pair(num_fields, fields)));
 		args.push_back(HookArgument(vals));
-		MetaHookPre(HOOK_LOG_WRITE, args);
+		MetaHookPre(zeek::plugin::HOOK_LOG_WRITE, args);
 		}
 
-	hook_list* l = hooks[HOOK_LOG_WRITE];
+	hook_list* l = hooks[zeek::plugin::HOOK_LOG_WRITE];
 
 	bool result = true;
 
@@ -868,21 +858,22 @@ bool Manager::HookLogWrite(const std::string& writer,
 				}
 			}
 
-	if ( HavePluginForHook(META_HOOK_POST) )
-		MetaHookPost(HOOK_LOG_WRITE, args, HookArgument(result));
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_POST) )
+		MetaHookPost(zeek::plugin::HOOK_LOG_WRITE, args, HookArgument(result));
 
 	return result;
 	}
 
 bool Manager::HookReporter(const std::string& prefix, const EventHandlerPtr event,
-			   const Connection* conn, const val_list* addl, bool location,
-			   const Location* location1, const Location* location2,
-			   bool time, const std::string& message)
+                           const Connection* conn, const val_list* addl, bool location,
+                           const zeek::detail::Location* location1,
+                           const zeek::detail::Location* location2,
+                           bool time, const std::string& message)
 
 	{
 	HookArgumentList args;
 
-	if ( HavePluginForHook(META_HOOK_PRE) )
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_PRE) )
 		{
 		args.push_back(HookArgument(prefix));
 		args.push_back(HookArgument(conn));
@@ -892,10 +883,10 @@ bool Manager::HookReporter(const std::string& prefix, const EventHandlerPtr even
 		args.push_back(HookArgument(location));
 		args.push_back(HookArgument(time));
 		args.push_back(HookArgument(message));
-		MetaHookPre(HOOK_REPORTER, args);
+		MetaHookPre(zeek::plugin::HOOK_REPORTER, args);
 		}
 
-	hook_list* l = hooks[HOOK_REPORTER];
+	hook_list* l = hooks[zeek::plugin::HOOK_REPORTER];
 
 	bool result = true;
 
@@ -913,33 +904,23 @@ bool Manager::HookReporter(const std::string& prefix, const EventHandlerPtr even
 			}
 		}
 
-	if ( HavePluginForHook(META_HOOK_POST) )
-		MetaHookPost(HOOK_REPORTER, args, HookArgument(result));
+	if ( HavePluginForHook(zeek::plugin::META_HOOK_POST) )
+		MetaHookPost(zeek::plugin::HOOK_REPORTER, args, HookArgument(result));
 
 	return result;
 	}
 
 
-void Manager::MetaHookPre(HookType hook, const HookArgumentList& args) const
+void Manager::MetaHookPre(zeek::plugin::HookType hook, const HookArgumentList& args) const
 	{
-	hook_list* l = hooks[HOOK_CALL_FUNCTION];
-
-	if ( l )
-		for ( hook_list::iterator i = l->begin(); i != l->end(); ++i )
-			{
-			Plugin* p = (*i).second;
-			p->MetaHookPre(hook, args);
-			}
+	if ( hook_list* l = hooks[zeek::plugin::HOOK_CALL_FUNCTION] )
+		for ( const auto& [hook_type, plugin] : *l )
+			plugin->MetaHookPre(hook, args);
 	}
 
-void Manager::MetaHookPost(HookType hook, const HookArgumentList& args, HookArgument result) const
+void Manager::MetaHookPost(zeek::plugin::HookType hook, const HookArgumentList& args, HookArgument result) const
 	{
-	hook_list* l = hooks[HOOK_CALL_FUNCTION];
-
-	if ( l )
-		for ( hook_list::iterator i = l->begin(); i != l->end(); ++i )
-			{
-			Plugin* p = (*i).second;
-			p->MetaHookPost(hook, args, result);
-			}
+	if ( hook_list* l = hooks[zeek::plugin::HOOK_CALL_FUNCTION] )
+		for ( const auto& [hook_type, plugin] : *l )
+			plugin->MetaHookPost(hook, args, result);
 	}

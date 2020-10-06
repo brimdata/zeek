@@ -40,19 +40,19 @@ void* PrefixTable::Insert(const IPAddr& addr, int width, void* data)
 	return old;
 	}
 
-void* PrefixTable::Insert(const Val* value, void* data)
+void* PrefixTable::Insert(const zeek::Val* value, void* data)
 	{
 	// [elem] -> elem
-	if ( value->Type()->Tag() == TYPE_LIST &&
+	if ( value->GetType()->Tag() == zeek::TYPE_LIST &&
 	     value->AsListVal()->Length() == 1 )
-		value = value->AsListVal()->Index(0);
+		value = value->AsListVal()->Idx(0).get();
 
-	switch ( value->Type()->Tag() ) {
-	case TYPE_ADDR:
+	switch ( value->GetType()->Tag() ) {
+	case zeek::TYPE_ADDR:
 		return Insert(value->AsAddr(), 128, data);
 		break;
 
-	case TYPE_SUBNET:
+	case zeek::TYPE_SUBNET:
 		return Insert(value->AsSubNet().Prefix(),
 				value->AsSubNet().LengthIPv6(), data);
 		break;
@@ -81,7 +81,7 @@ std::list<std::tuple<IPPrefix,void*>> PrefixTable::FindAll(const IPAddr& addr, i
 	return out;
 	}
 
-std::list<std::tuple<IPPrefix,void*>> PrefixTable::FindAll(const SubNetVal* value) const
+std::list<std::tuple<IPPrefix,void*>> PrefixTable::FindAll(const zeek::SubNetVal* value) const
 	{
 	return FindAll(value->AsSubNet().Prefix(), value->AsSubNet().LengthIPv6());
 	}
@@ -100,26 +100,26 @@ void* PrefixTable::Lookup(const IPAddr& addr, int width, bool exact) const
 	return node ? node->data : nullptr;
 	}
 
-void* PrefixTable::Lookup(const Val* value, bool exact) const
+void* PrefixTable::Lookup(const zeek::Val* value, bool exact) const
 	{
 	// [elem] -> elem
-	if ( value->Type()->Tag() == TYPE_LIST &&
+	if ( value->GetType()->Tag() == zeek::TYPE_LIST &&
 	     value->AsListVal()->Length() == 1 )
-		value = value->AsListVal()->Index(0);
+		value = value->AsListVal()->Idx(0).get();
 
-	switch ( value->Type()->Tag() ) {
-	case TYPE_ADDR:
+	switch ( value->GetType()->Tag() ) {
+	case zeek::TYPE_ADDR:
 		return Lookup(value->AsAddr(), 128, exact);
 		break;
 
-	case TYPE_SUBNET:
+	case zeek::TYPE_SUBNET:
 		return Lookup(value->AsSubNet().Prefix(),
 				value->AsSubNet().LengthIPv6(), exact);
 		break;
 
 	default:
 		reporter->InternalWarning("Wrong index type %d for PrefixTable",
-		                          value->Type()->Tag());
+		                          value->GetType()->Tag());
 		return nullptr;
 	}
 	}
@@ -139,19 +139,19 @@ void* PrefixTable::Remove(const IPAddr& addr, int width)
 	return old;
 	}
 
-void* PrefixTable::Remove(const Val* value)
+void* PrefixTable::Remove(const zeek::Val* value)
 	{
 	// [elem] -> elem
-	if ( value->Type()->Tag() == TYPE_LIST &&
+	if ( value->GetType()->Tag() == zeek::TYPE_LIST &&
 	     value->AsListVal()->Length() == 1 )
-		value = value->AsListVal()->Index(0);
+		value = value->AsListVal()->Idx(0).get();
 
-	switch ( value->Type()->Tag() ) {
-	case TYPE_ADDR:
+	switch ( value->GetType()->Tag() ) {
+	case zeek::TYPE_ADDR:
 		return Remove(value->AsAddr(), 128);
 		break;
 
-	case TYPE_SUBNET:
+	case zeek::TYPE_SUBNET:
 		return Remove(value->AsSubNet().Prefix(),
 				value->AsSubNet().LengthIPv6());
 		break;

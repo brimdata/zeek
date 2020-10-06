@@ -23,15 +23,17 @@
 
 #include <stdlib.h>
 
-class BroString;
-
 // to allow bro_md5_hmac access to the hmac seed
 #include "ZeekArgs.h"
-class Val;
-class Frame;
+
+ZEEK_FORWARD_DECLARE_NAMESPACED(Frame, zeek::detail);
+
+namespace zeek { class String; }
+using BroString [[deprecated("Remove in v4.1. Use zeek::String instead.")]] = zeek::String;
+
 class BifReturnVal;
-namespace BifFunc {
-	extern BifReturnVal bro_md5_hmac(Frame* frame, const zeek::Args*);
+namespace zeek::BifFunc {
+	extern BifReturnVal md5_hmac_bif(zeek::detail::Frame* frame, const zeek::Args*);
 }
 
 typedef uint64_t hash_t;
@@ -186,17 +188,17 @@ public:
 
 private:
 	// actually HHKey. This key changes each start (unless a seed is specified)
-	alignas(32) inline static uint64_t shared_highwayhash_key[4];
+	alignas(32) static uint64_t shared_highwayhash_key[4];
 	// actually HHKey. This key is installation specific and sourced from the digest_salt script-level const.
-	alignas(32) inline static uint64_t cluster_highwayhash_key[4];
+	alignas(32) static uint64_t cluster_highwayhash_key[4];
 	// actually HH_U64, which has the same type. This key changes each start (unless a seed is specified)
-	alignas(16) inline static unsigned long long shared_siphash_key[2];
+	alignas(16) static unsigned long long shared_siphash_key[2];
 	// This key changes each start (unless a seed is specified)
 	inline static uint8_t shared_hmac_md5_key[16];
 	inline static bool seeds_initialized = false;
 
 	friend void hmac_md5(size_t size, const unsigned char* bytes, unsigned char digest[16]);
-	friend BifReturnVal BifFunc::bro_md5_hmac(Frame* frame, const zeek::Args*);
+	friend BifReturnVal zeek::BifFunc::md5_hmac_bif(zeek::detail::Frame* frame, const zeek::Args*);
 };
 
 typedef enum {
@@ -215,7 +217,7 @@ public:
 	explicit HashKey(double d);
 	explicit HashKey(const void* p);
 	explicit HashKey(const char* s);
-	explicit HashKey(const BroString* s);
+	explicit HashKey(const zeek::String* s);
 	~HashKey()
 		{
 		if ( is_our_dynamic )

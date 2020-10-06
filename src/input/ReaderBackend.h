@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "BroString.h"
+#include "ZeekString.h"
 
 #include "threading/SerialTypes.h"
 #include "threading/MsgThread.h"
@@ -279,18 +279,6 @@ protected:
 	 * Triggered by regular heartbeat messages from the main thread.
 	 */
 	virtual bool DoHeartbeat(double network_time, double current_time) = 0;
-
-	/**
-	 * Method allowing a reader to send a specified Bro event. Vals must
-	 * match the values expected by the bro event.
-	 *
-	 * @param name name of the bro event to send
-	 *
-	 * @param num_vals number of entries in \a vals
-	 *
-	 * @param vals the values to be given to the event
-	 */
-	void SendEvent(const char* name, const int num_vals, threading::Value* *vals);
 
 	// Content-sending-functions (simple mode). Include table-specific
 	// functionality that simply is not used if we have no table.

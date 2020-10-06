@@ -5,6 +5,8 @@
 #include <type_traits>
 #include <utility>
 
+namespace zeek {
+
 /**
  * A tag class for the #IntrusivePtr constructor which means: adopt
  * the reference from the caller.
@@ -31,7 +33,7 @@ struct NewRef {};
  * for destroying the shared object.
  *
  * The @c IntrusivePtr works with any type that offers the two free functions,
- * but most notably is designed to work with @c BroObj and its subtypes.
+ * but most notably is designed to work with @c Obj and its subtypes.
  *
  * The same object may get managed via @c IntrusivePtr in one part of the
  * code base while another part of the program manages it manually by passing
@@ -97,7 +99,7 @@ public:
 		}
 
 	IntrusivePtr(const IntrusivePtr& other) noexcept
-		: IntrusivePtr(NewRef{}, other.get())
+		: IntrusivePtr(zeek::NewRef{}, other.get())
 		{
 		}
 
@@ -181,8 +183,22 @@ template <class T, class... Ts>
 IntrusivePtr<T> make_intrusive(Ts&&... args)
 	{
 	// Assumes that objects start with a reference count of 1!
-	return {AdoptRef{}, new T(std::forward<Ts>(args)...)};
+	return {zeek::AdoptRef{}, new T(std::forward<Ts>(args)...)};
 	}
+
+/**
+ * Casts an @c IntrusivePtr object to another by way of static_cast on
+ * the underlying pointer.
+ * @param p  The pointer of type @c U to cast to another type, @c T.
+ * @return  The pointer, as cast to type @c T.
+ */
+template <class T, class U>
+IntrusivePtr<T> cast_intrusive(IntrusivePtr<U> p) noexcept
+	{
+	return {zeek::AdoptRef{}, static_cast<T*>(p.release())};
+	}
+
+}
 
 // -- comparison to nullptr ----------------------------------------------------
 
@@ -190,7 +206,7 @@ IntrusivePtr<T> make_intrusive(Ts&&... args)
  * @relates IntrusivePtr
  */
 template <class T>
-bool operator==(const IntrusivePtr<T>& x, std::nullptr_t) {
+bool operator==(const zeek::IntrusivePtr<T>& x, std::nullptr_t) {
   return !x;
 }
 
@@ -198,7 +214,7 @@ bool operator==(const IntrusivePtr<T>& x, std::nullptr_t) {
  * @relates IntrusivePtr
  */
 template <class T>
-bool operator==(std::nullptr_t, const IntrusivePtr<T>& x) {
+bool operator==(std::nullptr_t, const zeek::IntrusivePtr<T>& x) {
   return !x;
 }
 
@@ -206,7 +222,7 @@ bool operator==(std::nullptr_t, const IntrusivePtr<T>& x) {
  * @relates IntrusivePtr
  */
 template <class T>
-bool operator!=(const IntrusivePtr<T>& x, std::nullptr_t) {
+bool operator!=(const zeek::IntrusivePtr<T>& x, std::nullptr_t) {
   return static_cast<bool>(x);
 }
 
@@ -214,7 +230,7 @@ bool operator!=(const IntrusivePtr<T>& x, std::nullptr_t) {
  * @relates IntrusivePtr
  */
 template <class T>
-bool operator!=(std::nullptr_t, const IntrusivePtr<T>& x) {
+bool operator!=(std::nullptr_t, const zeek::IntrusivePtr<T>& x) {
   return static_cast<bool>(x);
 }
 
@@ -224,7 +240,7 @@ bool operator!=(std::nullptr_t, const IntrusivePtr<T>& x) {
  * @relates IntrusivePtr
  */
 template <class T>
-bool operator==(const IntrusivePtr<T>& x, const T* y) {
+bool operator==(const zeek::IntrusivePtr<T>& x, const T* y) {
   return x.get() == y;
 }
 
@@ -232,7 +248,7 @@ bool operator==(const IntrusivePtr<T>& x, const T* y) {
  * @relates IntrusivePtr
  */
 template <class T>
-bool operator==(const T* x, const IntrusivePtr<T>& y) {
+bool operator==(const T* x, const zeek::IntrusivePtr<T>& y) {
   return x == y.get();
 }
 
@@ -240,7 +256,7 @@ bool operator==(const T* x, const IntrusivePtr<T>& y) {
  * @relates IntrusivePtr
  */
 template <class T>
-bool operator!=(const IntrusivePtr<T>& x, const T* y) {
+bool operator!=(const zeek::IntrusivePtr<T>& x, const T* y) {
   return x.get() != y;
 }
 
@@ -248,7 +264,7 @@ bool operator!=(const IntrusivePtr<T>& x, const T* y) {
  * @relates IntrusivePtr
  */
 template <class T>
-bool operator!=(const T* x, const IntrusivePtr<T>& y) {
+bool operator!=(const T* x, const zeek::IntrusivePtr<T>& y) {
   return x != y.get();
 }
 
@@ -261,7 +277,7 @@ bool operator!=(const T* x, const IntrusivePtr<T>& y) {
  * @relates IntrusivePtr
  */
 template <class T, class U>
-auto operator==(const IntrusivePtr<T>& x, const IntrusivePtr<U>& y)
+auto operator==(const zeek::IntrusivePtr<T>& x, const zeek::IntrusivePtr<U>& y)
 -> decltype(x.get() == y.get())
 	{
 	return x.get() == y.get();
@@ -271,9 +287,8 @@ auto operator==(const IntrusivePtr<T>& x, const IntrusivePtr<U>& y)
  * @relates IntrusivePtr
  */
 template <class T, class U>
-auto operator!=(const IntrusivePtr<T>& x, const IntrusivePtr<U>& y)
+auto operator!=(const zeek::IntrusivePtr<T>& x, const zeek::IntrusivePtr<U>& y)
 -> decltype(x.get() != y.get())
 	{
 	return x.get() != y.get();
 	}
-

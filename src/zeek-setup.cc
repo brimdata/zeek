@@ -45,6 +45,7 @@ extern "C" {
 #include "Traverse.h"
 #include "Trigger.h"
 #include "Hash.h"
+#include "Func.h"
 
 #include "supervisor/Supervisor.h"
 #include "threading/Manager.h"
@@ -86,22 +87,22 @@ int perftools_profile = 0;
 
 DNS_Mgr* dns_mgr;
 TimerMgr* timer_mgr;
-ValManager* val_mgr = nullptr;
+zeek::ValManager* zeek::val_mgr = nullptr;
+zeek::ValManager*& val_mgr = zeek::val_mgr;
 logging::Manager* log_mgr = nullptr;
 threading::Manager* thread_mgr = nullptr;
 input::Manager* input_mgr = nullptr;
-plugin::Manager* plugin_mgr = nullptr;
+zeek::plugin::Manager* plugin_mgr = nullptr;
 analyzer::Manager* analyzer_mgr = nullptr;
 file_analysis::Manager* file_mgr = nullptr;
 zeekygen::Manager* zeekygen_mgr = nullptr;
 iosource::Manager* iosource_mgr = nullptr;
 bro_broker::Manager* broker_mgr = nullptr;
 zeek::Supervisor* zeek::supervisor_mgr = nullptr;
-trigger::Manager* trigger_mgr = nullptr;
+zeek::detail::trigger::Manager* trigger_mgr = nullptr;
 
 std::vector<std::string> zeek_script_prefixes;
-Stmt* stmts;
-EventHandlerPtr net_done = nullptr;
+zeek::detail::Stmt* stmts;
 RuleMatcher* rule_matcher = nullptr;
 EventRegistry* event_registry = nullptr;
 ProfileLogger* profiling_logger = nullptr;
@@ -114,16 +115,16 @@ vector<string> params;
 set<string> requested_plugins;
 const char* proc_status_file = nullptr;
 
-OpaqueType* md5_type = nullptr;
-OpaqueType* sha1_type = nullptr;
-OpaqueType* sha256_type = nullptr;
-OpaqueType* entropy_type = nullptr;
-OpaqueType* cardinality_type = nullptr;
-OpaqueType* topk_type = nullptr;
-OpaqueType* bloomfilter_type = nullptr;
-OpaqueType* x509_opaque_type = nullptr;
-OpaqueType* ocsp_resp_opaque_type = nullptr;
-OpaqueType* paraglob_type = nullptr;
+zeek::OpaqueTypePtr md5_type;
+zeek::OpaqueTypePtr sha1_type;
+zeek::OpaqueTypePtr sha256_type;
+zeek::OpaqueTypePtr entropy_type;
+zeek::OpaqueTypePtr cardinality_type;
+zeek::OpaqueTypePtr topk_type;
+zeek::OpaqueTypePtr bloomfilter_type;
+zeek::OpaqueTypePtr x509_opaque_type;
+zeek::OpaqueTypePtr ocsp_resp_opaque_type;
+zeek::OpaqueTypePtr paraglob_type;
 
 // Keep copy of command line
 int bro_argc;
@@ -160,7 +161,7 @@ static std::vector<const char*> to_cargs(const std::vector<std::string>& args)
 
 bool show_plugins(int level)
 	{
-	plugin::Manager::plugin_list plugins = plugin_mgr->ActivePlugins();
+	zeek::plugin::Manager::plugin_list plugins = plugin_mgr->ActivePlugins();
 
 	if ( ! plugins.size() )
 		{
@@ -175,7 +176,7 @@ bool show_plugins(int level)
 
 	int count = 0;
 
-	for ( plugin::Manager::plugin_list::const_iterator i = plugins.begin(); i != plugins.end(); i++ )
+	for ( zeek::plugin::Manager::plugin_list::const_iterator i = plugins.begin(); i != plugins.end(); i++ )
 		{
 		if ( requested_plugins.size()
 		     && requested_plugins.find((*i)->Name()) == requested_plugins.end() )
@@ -191,13 +192,13 @@ bool show_plugins(int level)
 
 	printf("%s", d.Description());
 
-	plugin::Manager::inactive_plugin_list inactives = plugin_mgr->InactivePlugins();
+	zeek::plugin::Manager::inactive_plugin_list inactives = plugin_mgr->InactivePlugins();
 
 	if ( inactives.size() && ! requested_plugins.size() )
 		{
 		printf("\nInactive dynamic plugins:\n");
 
-		for ( plugin::Manager::inactive_plugin_list::const_iterator i = inactives.begin(); i != inactives.end(); i++ )
+		for ( zeek::plugin::Manager::inactive_plugin_list::const_iterator i = inactives.begin(); i != inactives.end(); i++ )
 			{
 			string name = (*i).first;
 			string path = (*i).second;
@@ -220,7 +221,7 @@ void done_with_network()
 		mgr.Drain();
 		// Don't propagate this event to remote clients.
 		mgr.Dispatch(new Event(net_done,
-		                       {make_intrusive<Val>(timer_mgr->Time(), TYPE_TIME)}),
+		                       {zeek::make_intrusive<zeek::TimeVal>(timer_mgr->Time())}),
 		             true);
 		}
 
@@ -269,7 +270,6 @@ void terminate_bro()
 
 	brofiler.WriteStats();
 
-	EventHandlerPtr zeek_done = internal_handler("zeek_done");
 	if ( zeek_done )
 		mgr.Enqueue(zeek_done, zeek::Args{});
 
@@ -308,10 +308,10 @@ void terminate_bro()
 	delete log_mgr;
 	delete reporter;
 	delete plugin_mgr;
-	delete val_mgr;
+	delete zeek::val_mgr;
 
 	// free the global scope
-	pop_scope();
+	zeek::detail::pop_scope();
 
 	reporter = nullptr;
 	}
@@ -363,7 +363,7 @@ static std::vector<std::string> get_script_signature_files()
 
 	// Parse rule files defined on the script level.
 	char* script_signature_files =
-		copy_string(internal_val("signature_files")->AsString()->CheckString());
+		copy_string(zeek::id::find_val("signature_files")->AsString()->CheckString());
 
 	char* tmp = script_signature_files;
 	char* s;
@@ -415,7 +415,7 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 		exit(context.run());
 		}
 
-	auto stem_state = zeek::Supervisor::CreateStem(options.supervisor_mode);
+	auto stem = zeek::Supervisor::CreateStem(options.supervisor_mode);
 
 	if ( zeek::Supervisor::ThisNode() )
 		zeek::Supervisor::ThisNode()->Init(&options);
@@ -458,17 +458,17 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 		}
 
 	if ( options.process_status_file )
-		proc_status_file = options.process_status_file->data();
+		proc_status_file = copy_string(options.process_status_file->data());
 
 	atexit(atexit_handler);
 	set_processing_status("INITIALIZING", "main");
 
 	bro_start_time = current_time(true);
 
-	val_mgr = new ValManager();
+	zeek::val_mgr = new ValManager();
 	reporter = new Reporter(options.abort_on_scripting_errors);
 	thread_mgr = new threading::Manager();
-	plugin_mgr = new plugin::Manager();
+	plugin_mgr = new zeek::plugin::Manager();
 
 #ifdef DEBUG
 	if ( options.debug_log_streams )
@@ -487,8 +487,7 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 		zeek::Supervisor::Config cfg = {};
 		cfg.zeek_exe_path = zeek_exe_path;
 		options.filter_supervisor_options();
-		zeek::supervisor_mgr = new zeek::Supervisor(std::move(cfg),
-		                                            std::move(*stem_state));
+		zeek::supervisor_mgr = new zeek::Supervisor(std::move(cfg), std::move(*stem));
 		}
 
 	const char* seed_load_file = zeekenv("ZEEK_SEED_FILE");
@@ -571,7 +570,7 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 	file_mgr = new file_analysis::Manager();
 	auto broker_real_time = ! options.pcap_file && ! options.deterministic_mode;
 	broker_mgr = new bro_broker::Manager(broker_real_time);
-	trigger_mgr = new trigger::Manager();
+	trigger_mgr = new zeek::detail::trigger::Manager();
 
 	plugin_mgr->InitPreScript();
 	analyzer_mgr->InitPreScript();
@@ -594,16 +593,16 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 
 	init_event_handlers();
 
-	md5_type = new OpaqueType("md5");
-	sha1_type = new OpaqueType("sha1");
-	sha256_type = new OpaqueType("sha256");
-	entropy_type = new OpaqueType("entropy");
-	cardinality_type = new OpaqueType("cardinality");
-	topk_type = new OpaqueType("topk");
-	bloomfilter_type = new OpaqueType("bloomfilter");
-	x509_opaque_type = new OpaqueType("x509");
-	ocsp_resp_opaque_type = new OpaqueType("ocsp_resp");
-	paraglob_type = new OpaqueType("paraglob");
+	md5_type = zeek::make_intrusive<zeek::OpaqueType>("md5");
+	sha1_type = zeek::make_intrusive<zeek::OpaqueType>("sha1");
+	sha256_type = zeek::make_intrusive<zeek::OpaqueType>("sha256");
+	entropy_type = zeek::make_intrusive<zeek::OpaqueType>("entropy");
+	cardinality_type = zeek::make_intrusive<zeek::OpaqueType>("cardinality");
+	topk_type = zeek::make_intrusive<zeek::OpaqueType>("topk");
+	bloomfilter_type = zeek::make_intrusive<zeek::OpaqueType>("bloomfilter");
+	x509_opaque_type = zeek::make_intrusive<zeek::OpaqueType>("x509");
+	ocsp_resp_opaque_type = zeek::make_intrusive<zeek::OpaqueType>("ocsp_resp");
+	paraglob_type = zeek::make_intrusive<zeek::OpaqueType>("paraglob");
 
 	// The leak-checker tends to produce some false
 	// positives (memory which had already been
@@ -630,12 +629,12 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 	// Must come after plugin activation (and also after hash
 	// initialization).
 	binpac::FlowBuffer::Policy flowbuffer_policy;
-	flowbuffer_policy.max_capacity = global_scope()->Lookup(
-		"BinPAC::flowbuffer_capacity_max")->ID_Val()->AsCount();
-	flowbuffer_policy.min_capacity = global_scope()->Lookup(
-		"BinPAC::flowbuffer_capacity_min")->ID_Val()->AsCount();
-	flowbuffer_policy.contract_threshold = global_scope()->Lookup(
-		"BinPAC::flowbuffer_contract_threshold")->ID_Val()->AsCount();
+	flowbuffer_policy.max_capacity = global_scope()->Find(
+		"BinPAC::flowbuffer_capacity_max")->GetVal()->AsCount();
+	flowbuffer_policy.min_capacity = global_scope()->Find(
+		"BinPAC::flowbuffer_capacity_min")->GetVal()->AsCount();
+	flowbuffer_policy.contract_threshold = global_scope()->Find(
+		"BinPAC::flowbuffer_contract_threshold")->GetVal()->AsCount();
 	binpac::init(&flowbuffer_policy);
 
 	plugin_mgr->InitBifs();
@@ -644,6 +643,7 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 		exit(1);
 
 	iosource_mgr->InitPostScript();
+	log_mgr->InitPostScript();
 	plugin_mgr->InitPostScript();
 	zeekygen_mgr->InitPostScript();
 	broker_mgr->InitPostScript();
@@ -685,12 +685,12 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 
 	if ( options.pcap_filter )
 		{
-		ID* id = global_scope()->Lookup("cmd_line_bpf_filter");
+		const auto& id = global_scope()->Find("cmd_line_bpf_filter");
 
 		if ( ! id )
 			reporter->InternalError("global cmd_line_bpf_filter not defined");
 
-		id->SetVal(make_intrusive<StringVal>(*options.pcap_filter));
+		id->SetVal(zeek::make_intrusive<zeek::StringVal>(*options.pcap_filter));
 		}
 
 	auto all_signature_files = options.signature_files;
@@ -724,7 +724,7 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 
 	if ( ! options.pcap_file && ! options.interface )
 		{
-		Val* interfaces_val = internal_val("interfaces");
+		const auto& interfaces_val = zeek::id::find_val("interfaces");
 		if ( interfaces_val )
 			{
 			char* interfaces_str =
@@ -739,8 +739,6 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 
 	if ( dns_type != DNS_PRIME )
 		net_init(options.interface, options.pcap_file, options.pcap_output_file, options.use_watchdog);
-
-	net_done = internal_handler("net_done");
 
 	if ( ! g_policy_debug )
 		{
@@ -769,7 +767,7 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 	// Print the ID.
 	if ( options.identifier_to_print )
 		{
-		ID* id = global_scope()->Lookup(*options.identifier_to_print);
+		const auto& id = global_scope()->Find(*options.identifier_to_print);
 		if ( ! id )
 			reporter->FatalError("No such ID: %s\n", options.identifier_to_print->data());
 
@@ -784,6 +782,7 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 
 	if ( profiling_interval > 0 )
 		{
+		const auto& profiling_file = zeek::id::find_val("profiling_file");
 		profiling_logger = new ProfileLogger(profiling_file->AsFile(),
 			profiling_interval);
 
@@ -796,8 +795,7 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 		// we don't have any other source for it.
 		net_update_time(current_time());
 
-	EventHandlerPtr zeek_init = internal_handler("zeek_init");
-	if ( zeek_init )	//### this should be a function
+	if ( zeek_init )
 		mgr.Enqueue(zeek_init, zeek::Args{});
 
 	EventRegistry::string_list dead_handlers =
@@ -846,9 +844,8 @@ zeek::detail::SetupResult zeek::detail::setup(int argc, char** argv,
 				continue;
 
 			mgr.Enqueue(zeek_script_loaded,
-				make_intrusive<StringVal>(i->name.c_str()),
-				val_mgr->Count(i->include_level)
-			);
+			            zeek::make_intrusive<zeek::StringVal>(i->name.c_str()),
+			            zeek::val_mgr->Count(i->include_level));
 			}
 		}
 

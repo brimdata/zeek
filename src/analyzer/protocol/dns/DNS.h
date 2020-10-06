@@ -81,6 +81,27 @@ typedef enum {
 	DNS_ADDITIONAL,
 } DNS_AnswerType;
 
+// https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
+// DNS EDNS0 Option Codes (OPT)
+typedef enum {
+	TYPE_LLQ = 1,			///< https://www.iana.org/go/draft-sekar-dns-llq-06
+	TYPE_UL = 2,			///< http://files.dns-sd.org/draft-sekar-dns-ul.txt
+	TYPE_NSID = 3,			///< RFC5001
+	TYPE_DAU = 5,			///< RFC6975
+	TYPE_DHU = 6,			///< RFC6975
+	TYPE_N3U = 7,			///< RFC6975
+	TYPE_ECS = 8,			///< RFC7871
+	TYPE_EXPIRE = 9,		///< RFC7314
+	TYPE_TCP_KA = 11,		///< RFC7828
+	TYPE_PAD = 12,			///< RFC7830
+	TYPE_CHAIN = 13,		///< RFC7901
+	TYPE_KEY_TAG = 14,		///< RFC8145
+	TYPE_ERROR = 15,		///< https://www.iana.org/go/draft-ietf-dnsop-extended-error-16
+	TYPE_CLIENT_TAG = 16,	///< https://www.iana.org/go/draft-bellis-dnsop-edns-tags
+	TYPE_SERVER_TAG = 17,	///< https://www.iana.org/go/draft-bellis-dnsop-edns-tags
+	TYPE_DEVICE_ID = 26946	///< https://docs.umbrella.com/developer/networkdevices-api/identifying-dns-traffic2
+} EDNS_OPT_Type;
+
 typedef enum {
 	reserved0 = 0,
 	RSA_MD5 = 1,          ///<	[RFC2537]  NOT RECOMMENDED
@@ -128,11 +149,18 @@ struct EDNS_ADDITIONAL {		// size
 	unsigned short rdata_len;	// 16
 };
 
+struct EDNS_ECS {
+	zeek::StringValPtr ecs_family;	///< EDNS client subnet address family
+	uint16_t ecs_src_pfx_len;	///< EDNS client subnet source prefix length
+	uint16_t ecs_scp_pfx_len;	///< EDNS client subnet scope prefix length
+	zeek::IntrusivePtr<zeek::AddrVal> ecs_addr;	///< EDNS client subnet address
+};
+
 struct TSIG_DATA {
-	BroString* alg_name;
+	zeek::String* alg_name;
 	unsigned long time_s;
 	unsigned short time_ms;
-	BroString* sig;
+	zeek::String* sig;
 	unsigned short fudge;
 	unsigned short orig_id;
 	unsigned short rr_error;
@@ -146,15 +174,15 @@ struct RRSIG_DATA {
 	unsigned long sig_exp;			// 32
 	unsigned long sig_incep;		// 32
 	unsigned short key_tag;			//16
-	BroString* signer_name;
-	BroString* signature;
+	zeek::String* signer_name;
+	zeek::String* signature;
 };
 
 struct DNSKEY_DATA {
 	unsigned short dflags;			// 16 : ExtractShort(data, len)
 	unsigned short dalgorithm;		// 8
 	unsigned short dprotocol;		// 8
-	BroString* public_key;			// Variable lenght Public Key
+	zeek::String* public_key;			// Variable lenght Public Key
 };
 
 struct NSEC3_DATA {
@@ -162,32 +190,32 @@ struct NSEC3_DATA {
 	unsigned short nsec_hash_algo;
 	unsigned short nsec_iter;
 	unsigned short nsec_salt_len;
-	BroString* nsec_salt;
+	zeek::String* nsec_salt;
 	unsigned short nsec_hlen;
-	BroString* nsec_hash;
-	VectorVal* bitmaps;
+	zeek::String* nsec_hash;
+	zeek::VectorValPtr bitmaps;
 };
 
 struct DS_DATA {
 	unsigned short key_tag;			// 16 : ExtractShort(data, len)
 	unsigned short algorithm;		// 8
 	unsigned short digest_type;		// 8
-	BroString* digest_val;			// Variable lenght Digest of DNSKEY RR
+	zeek::String* digest_val;			// Variable lenght Digest of DNSKEY RR
 };
 
 class DNS_MsgInfo {
 public:
 	DNS_MsgInfo(DNS_RawMsgHdr* hdr, int is_query);
-	~DNS_MsgInfo();
 
-	Val* BuildHdrVal();
-	Val* BuildAnswerVal();
-	Val* BuildEDNS_Val();
-	Val* BuildTSIG_Val(struct TSIG_DATA*);
-	Val* BuildRRSIG_Val(struct RRSIG_DATA*);
-	Val* BuildDNSKEY_Val(struct DNSKEY_DATA*);
-	Val* BuildNSEC3_Val(struct NSEC3_DATA*);
-	Val* BuildDS_Val(struct DS_DATA*);
+	zeek::RecordValPtr BuildHdrVal();
+	zeek::RecordValPtr BuildAnswerVal();
+	zeek::RecordValPtr BuildEDNS_Val();
+	zeek::RecordValPtr BuildEDNS_ECS_Val(struct EDNS_ECS*);
+	zeek::RecordValPtr BuildTSIG_Val(struct TSIG_DATA*);
+	zeek::RecordValPtr BuildRRSIG_Val(struct RRSIG_DATA*);
+	zeek::RecordValPtr BuildDNSKEY_Val(struct DNSKEY_DATA*);
+	zeek::RecordValPtr BuildNSEC3_Val(struct NSEC3_DATA*);
+	zeek::RecordValPtr BuildDS_Val(struct DS_DATA*);
 
 	int id;
 	int opcode;	///< query type, see DNS_Opcode
@@ -204,7 +232,7 @@ public:
 	int arcount;	///< number of additional RRs
 	int is_query;	///< whether it came from the session initiator
 
-	StringVal* query_name;
+	zeek::StringValPtr query_name;
 	RR_Type atype;
 	int aclass;	///< normally = 1, inet
 	uint32_t ttl;
@@ -243,16 +271,16 @@ protected:
 
 	u_char* ExtractName(const u_char*& data, int& len,
 				u_char* label, int label_len,
-				const u_char* msg_start);
+				const u_char* msg_start, bool downcase = true);
 	bool ExtractLabel(const u_char*& data, int& len,
 			 u_char*& label, int& label_len,
 			 const u_char* msg_start);
 
 	uint16_t ExtractShort(const u_char*& data, int& len);
 	uint32_t ExtractLong(const u_char*& data, int& len);
-	void ExtractOctets(const u_char*& data, int& len, BroString** p);
+	void ExtractOctets(const u_char*& data, int& len, zeek::String** p);
 
-	BroString* ExtractStream(const u_char*& data, int& len, int sig_len);
+	zeek::String* ExtractStream(const u_char*& data, int& len, int sig_len);
 
 	bool ParseRR_Name(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
@@ -270,6 +298,9 @@ protected:
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
 	bool ParseRR_EDNS(DNS_MsgInfo* msg,
+				const u_char*& data, int& len, int rdlength,
+				const u_char* msg_start);
+	bool ParseRR_EDNS_ECS(DNS_MsgInfo* msg,
 				const u_char*& data, int& len, int rdlength,
 				const u_char* msg_start);
 	bool ParseRR_A(DNS_MsgInfo* msg,
@@ -309,7 +340,8 @@ protected:
 				const u_char* msg_start);
 	void SendReplyOrRejectEvent(DNS_MsgInfo* msg, EventHandlerPtr event,
 					const u_char*& data, int& len,
-					BroString* question_name);
+					zeek::String* question_name,
+					zeek::String* original_name);
 
 	analyzer::Analyzer* analyzer;
 	bool first_message;
@@ -335,6 +367,7 @@ public:
 
 protected:
 	void DeliverStream(int len, const u_char* data, bool orig) override;
+	void ProcessChunk(int& len, const u_char*& data, bool orig);
 
 	DNS_Interpreter* interp;
 

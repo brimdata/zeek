@@ -18,11 +18,11 @@ extern void add_input_file_at_front(const char* file);
 
 // Adds the substrings (using the given delimiter) in a string to the
 // given namelist.
-extern void add_to_name_list(char* s, char delim, name_list& nl);
+extern void add_to_name_list(char* s, char delim, zeek::name_list& nl);
 
 extern void begin_RE();
 
-extern void do_atif(Expr* expr);
+extern void do_atif(zeek::detail::Expr* expr);
 extern void do_atifdef(const char* id);
 extern void do_atifndef(const char* id);
 extern void do_atelse();
@@ -41,5 +41,5 @@ extern std::vector<std::string> zeek_script_prefixes;	// -p flag
 extern const char* command_line_policy;	// -e flag
 extern std::vector<std::string> params;
 
-class Stmt;
-extern Stmt* stmts;	// global statements
+ZEEK_FORWARD_DECLARE_NAMESPACED(Stmt, zeek::detail);
+extern zeek::detail::Stmt* stmts;	// global statements

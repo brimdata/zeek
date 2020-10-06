@@ -7,6 +7,7 @@
 #include <openssl/evp.h>
 
 #include "NetVar.h"
+#include "Var.h"
 #include "digest.h"
 #include "highwayhash/sip_hash.h"
 
@@ -22,10 +23,12 @@ Hasher::seed_t Hasher::MakeSeed(const void* data, size_t size)
 
 	assert(sizeof(tmpseed) == 16);
 
+	static auto global_hash_seed = zeek::id::find_val<zeek::StringVal>("global_hash_seed");
+
 	if ( data )
 		hash_update(ctx, data, size);
 
-	else if ( global_hash_seed && global_hash_seed->Len() > 0 )
+	else if ( global_hash_seed->Len() > 0 )
 		hash_update(ctx, global_hash_seed->Bytes(), global_hash_seed->Len());
 
 	else
@@ -116,7 +119,7 @@ DefaultHasher::DefaultHasher(size_t k, Hasher::seed_t seed)
 	for ( size_t i = 1; i <= k; ++i )
 		{
 		seed_t s = Seed();
-		s.h[0] += bro_prng(i);
+		s.h[0] += zeek::prng(i);
 		hash_functions.push_back(UHF(s));
 		}
 	}
@@ -146,7 +149,7 @@ bool DefaultHasher::Equals(const Hasher* other) const
 	}
 
 DoubleHasher::DoubleHasher(size_t k, seed_t seed)
-	: Hasher(k, seed), h1(seed + bro_prng(1)), h2(seed + bro_prng(2))
+	: Hasher(k, seed), h1(seed + zeek::prng(1)), h2(seed + zeek::prng(2))
 	{
 	}
 
@@ -175,4 +178,3 @@ bool DoubleHasher::Equals(const Hasher* other) const
 	const DoubleHasher* o = static_cast<const DoubleHasher*>(other);
 	return h1 == o->h1 && h2 == o->h2;
 	}
-

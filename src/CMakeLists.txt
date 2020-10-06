@@ -153,7 +153,7 @@ add_subdirectory(input)
 add_subdirectory(iosource)
 add_subdirectory(logging)
 add_subdirectory(probabilistic)
-if (WIN32)
+if ( WIN32 )
     add_subdirectory(windows)
 endif ()
 
@@ -209,6 +209,9 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/DebugCmdConstants.h
 set_source_files_properties(nb_dns.c PROPERTIES COMPILE_FLAGS
                             -fno-strict-aliasing)
 
+set_source_files_properties(legacy-netvar-init.cc PROPERTIES COMPILE_FLAGS
+                            -Wno-deprecated-declarations)
+
 set(MAIN_SRCS
     digest.cc
     net_util.cc
@@ -219,8 +222,8 @@ set(MAIN_SRCS
     Anon.cc
     Attr.cc
     Base64.cc
+    BifReturnVal.cc
     Brofiler.cc
-    BroString.cc
     CCL.cc
     CompHash.cc
     Conn.cc
@@ -290,6 +293,8 @@ set(MAIN_SRCS
     Var.cc
     WeirdState.cc
     ZeekArgs.cc
+    ZeekString.cc
+    legacy-netvar-init.cc
     bsd-getopt-long.c
     bro_inet_ntop.c
     patricia.c
@@ -325,14 +330,14 @@ set(THIRD_PARTY_SRCS
 # Highwayhash. Highwayhash is a bit special since it has architecture dependent code...
 
 set(HH_SRCS
-    ../auxi/highwayhash/highwayhash/sip_hash.cc
-    ../auxi/highwayhash/highwayhash/sip_tree_hash.cc
-    ../auxi/highwayhash/highwayhash/scalar_sip_tree_hash.cc
-    ../auxi/highwayhash/highwayhash/arch_specific.cc
-    ../auxi/highwayhash/highwayhash/instruction_sets.cc
-    ../auxi/highwayhash/highwayhash/nanobenchmark.cc
-    ../auxi/highwayhash/highwayhash/os_specific.cc
-    ../auxi/highwayhash/highwayhash/hh_portable.cc
+    ../auxil/highwayhash/highwayhash/sip_hash.cc
+    ../auxil/highwayhash/highwayhash/sip_tree_hash.cc
+    ../auxil/highwayhash/highwayhash/scalar_sip_tree_hash.cc
+    ../auxil/highwayhash/highwayhash/arch_specific.cc
+    ../auxil/highwayhash/highwayhash/instruction_sets.cc
+    ../auxil/highwayhash/highwayhash/nanobenchmark.cc
+    ../auxil/highwayhash/highwayhash/os_specific.cc
+    ../auxil/highwayhash/highwayhash/hh_portable.cc
 )
 
 if (${COMPILER_ARCHITECTURE} STREQUAL "arm")
@@ -340,23 +345,23 @@ if (${COMPILER_ARCHITECTURE} STREQUAL "arm")
                               -mfloat-abi=hard -march=armv7-a -mfpu=neon)
 elseif (${COMPILER_ARCHITECTURE} STREQUAL "aarch64")
   list(APPEND HH_SRCS
-       ../auxi/highwayhash/highwayhash/hh_neon.cc
+       ../auxil/highwayhash/highwayhash/hh_neon.cc
   )
 elseif (${COMPILER_ARCHITECTURE} STREQUAL "power")
-  set_source_files_properties(../auxi/highwayhash/highwayhash/hh_avx2.cc PROPERTIES COMPILE_FLAGS
+  set_source_files_properties(../auxil/highwayhash/highwayhash/hh_vsx.cc PROPERTIES COMPILE_FLAGS
                               -mvsx)
   list(APPEND HH_SRCS
-       ../auxi/highwayhash/highwayhash/hh_vsc.cc
+       ../auxil/highwayhash/highwayhash/hh_vsx.cc
   )
 elseif(${COMPILER_ARCHITECTURE} STREQUAL "x86_64")
-  set_source_files_properties(../auxi/highwayhash/highwayhash/hh_avx2.cc PROPERTIES COMPILE_FLAGS
+  set_source_files_properties(../auxil/highwayhash/highwayhash/hh_avx2.cc PROPERTIES COMPILE_FLAGS
                               -mavx2)
-  set_source_files_properties(../auxi/highwayhash/highwayhash/hh_sse41.cc PROPERTIES COMPILE_FLAGS
+  set_source_files_properties(../auxil/highwayhash/highwayhash/hh_sse41.cc PROPERTIES COMPILE_FLAGS
                               -msse4.1)
 
   list(APPEND HH_SRCS
-      ../auxi/highwayhash/highwayhash/hh_avx2.cc
-      ../auxi/highwayhash/highwayhash/hh_sse41.cc
+      ../auxil/highwayhash/highwayhash/hh_avx2.cc
+      ../auxil/highwayhash/highwayhash/hh_sse41.cc
   )
 endif ()
 
@@ -399,7 +404,7 @@ endif ()
 
 install(TARGETS zeek DESTINATION bin)
 
-if (NOT WIN32)
+if ( NOT WIN32 )
     # Install wrapper script for Bro-to-Zeek renaming.
     include(InstallSymlink)
     InstallSymlink("${CMAKE_INSTALL_PREFIX}/bin/zeek-wrapper" "${CMAKE_INSTALL_PREFIX}/bin/bro")
@@ -467,6 +472,8 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/
         PATTERN "*.h"
         PATTERN "*.pac"
         PATTERN "3rdparty/*" EXCLUDE
+        # The "zeek -> ." symlink isn't needed in the install-tree
+        REGEX "^${CMAKE_CURRENT_SOURCE_DIR}/zeek$" EXCLUDE
 )
 
 install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/

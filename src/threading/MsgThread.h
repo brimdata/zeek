@@ -13,6 +13,8 @@ namespace threading {
 class BasicInputMessage;
 class BasicOutputMessage;
 class HeartbeatMessage;
+struct Value;
+struct Field;
 
 /**
  * A specialized thread that provides bi-directional message passing between
@@ -59,6 +61,18 @@ public:
 	 * @param msg The mesasge.
 	 */
 	void SendOut(BasicOutputMessage* msg)	{ return SendOut(msg, false); }
+
+	/**
+	 * Allows the child thread to send a specified Zeek event. The given Vals
+	 * must match the values expected by the event.
+	 *
+	 * @param name name of the bro event to send
+	 *
+	 * @param num_vals number of entries in \a vals
+	 *
+	 * @param vals the values to be given to the event
+	 */
+	void SendEvent(const char* name, const int num_vals, threading::Value* *vals);
 
 	/**
 	 * Reports an informational message from the child thread. The main
@@ -322,7 +336,7 @@ private:
 	bool child_sent_finish; // Child thread asked to be finished.
 	bool failed;	// Set to true when a command failed.
 
-	bro::Flare flare;
+	zeek::detail::Flare flare;
 };
 
 /**
@@ -393,7 +407,7 @@ protected:
 };
 
 /**
- * A paremeterized InputMessage that stores a pointer to an argument object.
+ * A parameterized InputMessage that stores a pointer to an argument object.
  * Normally, the objects will be used from the Process() callback.
  */
 template<typename O>

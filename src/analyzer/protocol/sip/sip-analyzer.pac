@@ -3,7 +3,7 @@ refine flow SIP_Flow += {
 	%member{
 		int content_length;
 		bool build_headers;
-		vector<BroVal> headers;
+		std::vector<zeek::ValPtr> headers;
 	%}
 
 	%init{
@@ -20,7 +20,7 @@ refine flow SIP_Flow += {
 		%{
 		if ( sip_request )
 			{
-			BifEvent::enqueue_sip_request(connection()->bro_analyzer(), connection()->bro_analyzer()->Conn(),
+			zeek::BifEvent::enqueue_sip_request(connection()->bro_analyzer(), connection()->bro_analyzer()->Conn(),
 						       to_stringval(method), to_stringval(uri),
 						       to_stringval(${vers.vers_str}));
 			}
@@ -35,7 +35,7 @@ refine flow SIP_Flow += {
 		connection()->bro_analyzer()->ProtocolConfirmation();
 		if ( sip_reply )
 			{
-			BifEvent::enqueue_sip_reply(connection()->bro_analyzer(), connection()->bro_analyzer()->Conn(),
+			zeek::BifEvent::enqueue_sip_reply(connection()->bro_analyzer(), connection()->bro_analyzer()->Conn(),
 						     to_stringval(${vers.vers_str}), code, to_stringval(reason));
 			}
 
@@ -53,13 +53,13 @@ refine flow SIP_Flow += {
 			{
 			auto nameval = to_stringval(name);
 			nameval->ToUpper();
-			BifEvent::enqueue_sip_header(connection()->bro_analyzer(), connection()->bro_analyzer()->Conn(),
+			zeek::BifEvent::enqueue_sip_header(connection()->bro_analyzer(), connection()->bro_analyzer()->Conn(),
 						      is_orig(), std::move(nameval), to_stringval(value));
 			}
 
 		if ( build_headers )
 			{
-			headers.push_back(build_sip_header_val(name, value));
+			headers.push_back({zeek::AdoptRef{}, build_sip_header_val(name, value)});
 			}
 
 		return true;
@@ -67,12 +67,13 @@ refine flow SIP_Flow += {
 
 	function build_sip_headers_val(): BroVal
 		%{
-		TableVal* t = new TableVal({NewRef{}, mime_header_list});
+		static auto mime_header_list = zeek::id::find_type<zeek::TableType>("mime_header_list");
+		auto* t = new zeek::TableVal(mime_header_list);
 
 		for ( unsigned int i = 0; i < headers.size(); ++i )
 			{ // index starting from 1
-			auto index = val_mgr->Count(i + 1);
-			t->Assign(index.get(), headers[i]);
+			auto index = zeek::val_mgr->Count(i + 1);
+			t->Assign(std::move(index), std::move(headers[i]));
 			}
 
 		return t;
@@ -82,8 +83,8 @@ refine flow SIP_Flow += {
 		%{
 		if ( sip_all_headers )
 			{
-			BifEvent::enqueue_sip_all_headers(connection()->bro_analyzer(), connection()->bro_analyzer()->Conn(),
-							   is_orig(), {AdoptRef{}, build_sip_headers_val()});
+			zeek::BifEvent::enqueue_sip_all_headers(connection()->bro_analyzer(), connection()->bro_analyzer()->Conn(),
+							   is_orig(), {zeek::AdoptRef{}, build_sip_headers_val()});
 			}
 
 		headers.clear();
@@ -101,18 +102,19 @@ refine flow SIP_Flow += {
 
 	function build_sip_header_val(name: const_bytestring, value: const_bytestring): BroVal
 		%{
-		RecordVal* header_record = new RecordVal(mime_header_rec);
-		IntrusivePtr<StringVal> name_val;
+		static auto mime_header_rec = zeek::id::find_type<zeek::RecordType>("mime_header_rec");
+		auto* header_record = new zeek::RecordVal(mime_header_rec);
+		zeek::StringValPtr name_val;
 
 		if ( name.length() > 0 )
 			{
 			// Make it all uppercase.
-			name_val = make_intrusive<StringVal>(name.length(), (const char*) name.begin());
+			name_val = zeek::make_intrusive<zeek::StringVal>(name.length(), (const char*) name.begin());
 			name_val->ToUpper();
 			}
 		else
 			{
-			name_val = val_mgr->EmptyString();
+			name_val = zeek::val_mgr->EmptyString();
 			}
 
 		header_record->Assign(0, name_val);
@@ -125,7 +127,7 @@ refine flow SIP_Flow += {
 		%{
 		if ( sip_begin_entity )
 			{
-			BifEvent::enqueue_sip_begin_entity(connection()->bro_analyzer(), connection()->bro_analyzer()->Conn(), is_orig());
+			zeek::BifEvent::enqueue_sip_begin_entity(connection()->bro_analyzer(), connection()->bro_analyzer()->Conn(), is_orig());
 			}
 		%}
 
@@ -133,7 +135,7 @@ refine flow SIP_Flow += {
 		%{
 		if ( sip_end_entity )
 			{
-			BifEvent::enqueue_sip_end_entity(connection()->bro_analyzer(), connection()->bro_analyzer()->Conn(), is_orig());
+			zeek::BifEvent::enqueue_sip_end_entity(connection()->bro_analyzer(), connection()->bro_analyzer()->Conn(), is_orig());
 			}
 
 		return true;

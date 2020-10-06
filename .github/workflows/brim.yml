@@ -21,21 +21,19 @@ jobs:
     steps:
       # Use MSYS2's bash.exe in subsequent "shell: bash" steps.
       - if: startsWith(matrix.os, 'windows-')
-        run: echo '::add-path::C:\msys64\usr\bin'
+        run: echo 'C:\msys64\usr\bin' >> $GITHUB_PATH
 
       # actions/checkout@v2 chokes on Windows because Git for Windows'
-      # git.exe can't handle Zeek's aux directory.  Use MSYS2's git.exe
-      # on Windows until the aux directory is renamed.
+      # git.exe can't handle the colons in the names of some files under
+      # testing/btest/Baseline/.
       - if: startsWith(matrix.os, 'windows-')
         name: Windows alternative for actions/checkout@v2
         run: |
           set -x
-          # '-Sdd' since we need none of Git's many, heavy dependencies.
-          pacman -Sdd --needed --noconfirm git
           git clone --depth=1 --no-checkout --single-branch git://github.com/$GITHUB_REPOSITORY .
           git fetch --depth=1 origin $GITHUB_REF
-          git checkout FETCH_HEAD
-          git submodule update --depth=1 --init --jobs $NUMBER_OF_PROCESSORS --recursive
+          git -c core.symlinks=true checkout FETCH_HEAD -- ':(exclude)**/*:*'
+          git submodule update --depth=1 --init --jobs $NUMBER_OF_PROCESSORS --recursive --single-branch
       - if: "!startsWith(matrix.os, 'windows-')"
         uses: actions/checkout@v2
         with:
@@ -49,7 +47,12 @@ jobs:
       - if: startsWith(matrix.os, 'windows-')
         uses: actions/setup-go@v2
         with:
-          go-version: 1.13
+          go-version: 1.14
+
+      - uses: actions/cache@v2
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache
 
       - run: ./brim/release
 

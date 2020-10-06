@@ -9,11 +9,12 @@
 
 using namespace file_analysis;
 
-Entropy::Entropy(RecordVal* args, File* file)
-    : file_analysis::Analyzer(file_mgr->GetComponentTag("ENTROPY"), args, file)
+Entropy::Entropy(zeek::RecordValPtr args, File* file)
+    : file_analysis::Analyzer(file_mgr->GetComponentTag("ENTROPY"),
+                              std::move(args), file)
 	{
 	//entropy->Init();
-	entropy = new EntropyVal;
+	entropy = new zeek::EntropyVal;
 	fed = false;
 	}
 
@@ -22,9 +23,10 @@ Entropy::~Entropy()
 	Unref(entropy);
 	}
 
-file_analysis::Analyzer* Entropy::Instantiate(RecordVal* args, File* file)
+file_analysis::Analyzer* Entropy::Instantiate(zeek::RecordValPtr args,
+                                              File* file)
 	{
-	return new Entropy(args, file);
+	return new Entropy(std::move(args), file);
 	}
 
 bool Entropy::DeliverStream(const u_char* data, uint64_t len)
@@ -60,15 +62,16 @@ void Entropy::Finalize()
 	montepi = scc = ent = mean = chisq = 0.0;
 	entropy->Get(&ent, &chisq, &mean, &montepi, &scc);
 
-	auto ent_result = make_intrusive<RecordVal>(entropy_test_result);
-	ent_result->Assign(0, make_intrusive<Val>(ent,     TYPE_DOUBLE));
-	ent_result->Assign(1, make_intrusive<Val>(chisq,   TYPE_DOUBLE));
-	ent_result->Assign(2, make_intrusive<Val>(mean,    TYPE_DOUBLE));
-	ent_result->Assign(3, make_intrusive<Val>(montepi, TYPE_DOUBLE));
-	ent_result->Assign(4, make_intrusive<Val>(scc,     TYPE_DOUBLE));
+	static auto entropy_test_result = zeek::id::find_type<zeek::RecordType>("entropy_test_result");
+	auto ent_result = zeek::make_intrusive<zeek::RecordVal>(entropy_test_result);
+	ent_result->Assign<zeek::DoubleVal>(0, ent);
+	ent_result->Assign<zeek::DoubleVal>(1, chisq);
+	ent_result->Assign<zeek::DoubleVal>(2, mean);
+	ent_result->Assign<zeek::DoubleVal>(3, montepi);
+	ent_result->Assign<zeek::DoubleVal>(4, scc);
 
 	mgr.Enqueue(file_entropy,
-		IntrusivePtr{NewRef{}, GetFile()->GetVal()},
+		GetFile()->ToVal(),
 		std::move(ent_result)
 	);
 	}

@@ -18,16 +18,16 @@ void PacketFilter::AddSrc(const IPAddr& src, uint32_t tcp_flags, double probabil
 	{
 	Filter* f = new Filter;
 	f->tcp_flags = tcp_flags;
-	f->probability = uint32_t(probability * RAND_MAX);
+	f->probability = probability * static_cast<double>(zeek::max_random());
 	auto prev = static_cast<Filter*>(src_filter.Insert(src, 128, f));
 	delete prev;
 	}
 
-void PacketFilter::AddSrc(Val* src, uint32_t tcp_flags, double probability)
+void PacketFilter::AddSrc(zeek::Val* src, uint32_t tcp_flags, double probability)
 	{
 	Filter* f = new Filter;
 	f->tcp_flags = tcp_flags;
-	f->probability = uint32_t(probability * RAND_MAX);
+	f->probability = probability * static_cast<double>(zeek::max_random());
 	auto prev = static_cast<Filter*>(src_filter.Insert(src, f));
 	delete prev;
 	}
@@ -36,16 +36,16 @@ void PacketFilter::AddDst(const IPAddr& dst, uint32_t tcp_flags, double probabil
 	{
 	Filter* f = new Filter;
 	f->tcp_flags = tcp_flags;
-	f->probability = uint32_t(probability * RAND_MAX);
+	f->probability = probability * static_cast<double>(zeek::max_random());
 	auto prev = static_cast<Filter*>(dst_filter.Insert(dst, 128, f));
 	delete prev;
 	}
 
-void PacketFilter::AddDst(Val* dst, uint32_t tcp_flags, double probability)
+void PacketFilter::AddDst(zeek::Val* dst, uint32_t tcp_flags, double probability)
 	{
 	Filter* f = new Filter;
 	f->tcp_flags = tcp_flags;
-	f->probability = uint32_t(probability * RAND_MAX);
+	f->probability = probability * static_cast<double>(zeek::max_random());
 	auto prev = static_cast<Filter*>(dst_filter.Insert(dst, f));
 	delete prev;
 	}
@@ -57,7 +57,7 @@ bool PacketFilter::RemoveSrc(const IPAddr& src)
 	return f != nullptr;
 	}
 
-bool PacketFilter::RemoveSrc(Val* src)
+bool PacketFilter::RemoveSrc(zeek::Val* src)
 	{
 	auto f = static_cast<Filter*>(src_filter.Remove(src));
 	delete f;
@@ -71,7 +71,7 @@ bool PacketFilter::RemoveDst(const IPAddr& dst)
 	return f != nullptr;
 	}
 
-bool PacketFilter::RemoveDst(Val* dst)
+bool PacketFilter::RemoveDst(zeek::Val* dst)
 	{
 	auto f = static_cast<Filter*>(dst_filter.Remove(dst));
 	delete f;
@@ -113,5 +113,5 @@ bool PacketFilter::MatchFilter(const Filter& f, const IP_Hdr& ip,
 			return false;
 		}
 
-	return uint32_t(bro_random()) < f.probability;
+	return zeek::random_number() < f.probability;
 	}

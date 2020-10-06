@@ -4,23 +4,38 @@
 
 #include "BroList.h"
 #include "ZeekArgs.h"
+#include "Type.h"
 
 #include <unordered_set>
 #include <string>
 
-class Func;
-class FuncType;
+ZEEK_FORWARD_DECLARE_NAMESPACED(Func, zeek);
+namespace zeek {
+using FuncPtr = zeek::IntrusivePtr<zeek::Func>;
+}
 
 class EventHandler {
 public:
-	explicit EventHandler(const char* name);
-	~EventHandler();
+	explicit EventHandler(std::string name);
 
-	const char* Name()	{ return name; }
-	Func* LocalHandler()	{ return local; }
-	FuncType* FType(bool check_export = true);
+	const char* Name()	{ return name.data(); }
 
-	void SetLocalHandler(Func* f);
+	const zeek::FuncPtr& GetFunc()
+		{ return local; }
+
+	[[deprecated("Remove in v4.1.  Use GetFunc().")]]
+	zeek::Func* LocalHandler()	{ return local.get(); }
+
+	const zeek::FuncTypePtr& GetType(bool check_export = true);
+
+	[[deprecated("Remove in v4.1.  Use GetType().")]]
+	zeek::FuncType* FType(bool check_export = true)
+		{ return GetType().get(); }
+
+	void SetFunc(zeek::FuncPtr f);
+
+	[[deprecated("Remove in v4.1.  Use SetFunc().")]]
+	void SetLocalHandler(zeek::Func* f);
 
 	void AutoPublish(std::string topic)
 		{
@@ -32,7 +47,7 @@ public:
 		auto_publish.erase(topic);
 		}
 
-	void Call(const zeek::Args& vl, bool no_remote = false);
+	void Call(zeek::Args* vl, bool no_remote = false);
 
 	// Returns true if there is at least one local or remote handler.
 	explicit operator  bool() const;
@@ -53,11 +68,11 @@ public:
 	bool GenerateAlways()	{ return generate_always; }
 
 private:
-	void NewEvent(const zeek::Args& vl);	// Raise new_event() meta event.
+	void NewEvent(zeek::Args* vl);	// Raise new_event() meta event.
 
-	const char* name;
-	Func* local;
-	FuncType* type;
+	std::string name;
+	zeek::FuncPtr local;
+	zeek::FuncTypePtr type;
 	bool used;		// this handler is indeed used somewhere
 	bool enabled;
 	bool error_handler;	// this handler reports error messages.

@@ -22,13 +22,13 @@ refine connection SMB_Conn += {
 		%{
 		if ( smb2_negotiate_request )
 			{
-			auto dialects = make_intrusive<VectorVal>(index_vec);
+			auto dialects = zeek::make_intrusive<zeek::VectorVal>(zeek::id::index_vec);
 
 			for ( unsigned int i = 0; i < ${val.dialects}->size(); ++i )
-				dialects->Assign(i, val_mgr->Count((*${val.dialects})[i]));
+				dialects->Assign(i, zeek::val_mgr->Count((*${val.dialects})[i]));
 
-			BifEvent::enqueue_smb2_negotiate_request(bro_analyzer(), bro_analyzer()->Conn(),
-			                                         {AdoptRef{}, BuildSMB2HeaderVal(h)},
+			zeek::BifEvent::enqueue_smb2_negotiate_request(bro_analyzer(), bro_analyzer()->Conn(),
+			                                         BuildSMB2HeaderVal(h),
 			                                         std::move(dialects));
 			}
 
@@ -39,16 +39,16 @@ refine connection SMB_Conn += {
 		%{
 		if ( smb2_negotiate_response )
 			{
-			auto nr = make_intrusive<RecordVal>(BifType::Record::SMB2::NegotiateResponse);
+			auto nr = zeek::make_intrusive<zeek::RecordVal>(zeek::BifType::Record::SMB2::NegotiateResponse);
 
-			nr->Assign(0, val_mgr->Count(${val.dialect_revision}));
-			nr->Assign(1, val_mgr->Count(${val.security_mode}));
+			nr->Assign(0, zeek::val_mgr->Count(${val.dialect_revision}));
+			nr->Assign(1, zeek::val_mgr->Count(${val.security_mode}));
 			nr->Assign(2, BuildSMB2GUID(${val.server_guid}));
 			nr->Assign(3, filetime2brotime(${val.system_time}));
 			nr->Assign(4, filetime2brotime(${val.server_start_time}));
-			nr->Assign(5, val_mgr->Count(${val.negotiate_context_count}));
+			nr->Assign(5, zeek::val_mgr->Count(${val.negotiate_context_count}));
 
-			VectorVal* cv = new VectorVal(BifType::Vector::SMB2::NegotiateContextValues);
+			auto cv = zeek::make_intrusive<zeek::VectorVal>(zeek::BifType::Vector::SMB2::NegotiateContextValues);
 
 			if ( ${val.dialect_revision} == 0x0311 && ${val.negotiate_context_count} > 0 )
 				{
@@ -58,11 +58,11 @@ refine connection SMB_Conn += {
 				cv->Assign(${val.smb3_ncl.list.vals}->size(), BuildSMB2ContextVal(${val.smb3_ncl.list.last_val}));
 				}
 
-			nr->Assign(6, cv);
+			nr->Assign(6, std::move(cv));
 
-			BifEvent::enqueue_smb2_negotiate_response(bro_analyzer(), bro_analyzer()->Conn(),
-			                                          {AdoptRef{}, BuildSMB2HeaderVal(h)},
-													  std::move(nr));
+			zeek::BifEvent::enqueue_smb2_negotiate_response(bro_analyzer(), bro_analyzer()->Conn(),
+			                                                BuildSMB2HeaderVal(h),
+			                                                std::move(nr));
 			}
 
 		return true;

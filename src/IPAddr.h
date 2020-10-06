@@ -6,18 +6,20 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <string>
+#include <memory>
 
 #include "threading/SerialTypes.h"
 
+namespace zeek { class String; }
+using BroString [[deprecated("Remove in v4.1. Use zeek::String instead.")]] = zeek::String;
+
 struct ConnID;
-class BroString;
 class HashKey;
 namespace analyzer { class ExpectedConn; }
 
 typedef in_addr in4_addr;
 
-struct ConnIDKey
-	{
+struct ConnIDKey {
 	in6_addr ip1;
 	in6_addr ip2;
 	uint16_t port1;
@@ -39,13 +41,12 @@ struct ConnIDKey
 
 		return *this;
 		}
-	};
+};
 
 /**
  * Class storing both IPv4 and IPv6 addresses.
  */
-class IPAddr
-{
+class IPAddr {
 public:
 	/**
 	 * Address family.
@@ -111,7 +112,7 @@ public:
 	 * @param s String containing an IP address as either a dotted IPv4
 	 * address or a hex IPv6 address.
 	 */
-	explicit IPAddr(const BroString& s);
+	explicit IPAddr(const zeek::String& s);
 
 	/**
 	 * Constructs an address instance from a raw byte representation.
@@ -247,9 +248,11 @@ public:
 		}
 
 	/**
-	 * Returns a key that can be used to lookup the IP Address in a hash
-	 * table. Passes ownership to caller.
+	 * Returns a key that can be used to lookup the IP Address in a hash table.
 	 */
+	std::unique_ptr<HashKey> MakeHashKey() const;
+
+	[[deprecated("Remove in v4.1.  Use MakeHashKey().")]]
 	HashKey* GetHashKey() const;
 
 	/**
@@ -629,9 +632,11 @@ public:
 	operator std::string() const	{ return AsString(); }
 
 	/**
-	 * Returns a key that can be used to lookup the IP Prefix in a hash
-	 * table. Passes ownership to caller.
+	 * Returns a key that can be used to lookup the IP Prefix in a hash table.
 	 */
+	std::unique_ptr<HashKey> MakeHashKey() const;
+
+	[[deprecated("Remove in v4.1.  Use MakeHashKey().")]]
 	HashKey* GetHashKey() const;
 
 	/** Converts the prefix into the type used internally by the

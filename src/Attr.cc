@@ -7,9 +7,12 @@
 #include "Desc.h"
 #include "Val.h"
 #include "IntrusivePtr.h"
+#include "input/Manager.h"
 #include "threading/SerialTypes.h"
 
-const char* attr_name(attr_tag t)
+namespace zeek::detail {
+
+const char* attr_name(AttrTag t)
 	{
 	static const char* attr_names[int(NUM_ATTRS)] = {
 		"&optional", "&default", "&redef",
@@ -17,25 +20,39 @@ const char* attr_name(attr_tag t)
 		"&read_expire", "&write_expire", "&create_expire",
 		"&raw_output", "&priority",
 		"&group", "&log", "&error_handler", "&type_column",
-		"(&tracked)", "&on_change", "&deprecated",
+		"(&tracked)", "&on_change", "&broker_store",
+		"&broker_allow_complex_type", "&backend", "&deprecated",
 	};
 
 	return attr_names[int(t)];
 	}
 
-Attr::Attr(attr_tag t, IntrusivePtr<Expr> e)
+Attr::Attr(AttrTag t, ExprPtr e)
 	: expr(std::move(e))
 	{
 	tag = t;
 	SetLocationInfo(&start_location, &end_location);
 	}
 
-Attr::Attr(attr_tag t)
+Attr::Attr(AttrTag t)
 	: Attr(t, nullptr)
 	{
 	}
 
-Attr::~Attr() = default;
+void Attr::SetAttrExpr(ExprPtr e)
+	{ expr = std::move(e); }
+
+std::string Attr::DeprecationMessage() const
+	{
+	if ( tag != ATTR_DEPRECATED )
+		return "";
+
+	if ( ! expr )
+		return "";
+
+	auto ce = static_cast<zeek::detail::ConstExpr*>(expr.get());
+	return ce->Value()->AsStringVal()->CheckString();
+	}
 
 void Attr::Describe(ODesc* d) const
 	{
@@ -94,10 +111,10 @@ void Attr::DescribeReST(ODesc* d, bool shorten) const
 			d->Add("`");
 			}
 
-		else if ( expr->Type()->Tag() == TYPE_FUNC )
+		else if ( expr->GetType()->Tag() == TYPE_FUNC )
 			{
 			d->Add(":zeek:type:`");
-			d->Add(expr->Type()->AsFuncType()->FlavorString());
+			d->Add(expr->GetType()->AsFuncType()->FlavorString());
 			d->Add("`");
 			}
 
@@ -133,10 +150,10 @@ void Attr::AddTag(ODesc* d) const
 		d->Add(attr_name(Tag()));
 	}
 
-Attributes::Attributes(attr_list* a, IntrusivePtr<BroType> t, bool arg_in_record, bool is_global)
-	: type(std::move(t))
+Attributes::Attributes(attr_list* a, TypePtr t, bool arg_in_record, bool is_global)
 	{
-	attrs = new attr_list(a->length());
+	attrs_list.resize(a->length());
+	attrs.reserve(a->length());
 	in_record = arg_in_record;
 	global_var = is_global;
 
@@ -147,27 +164,41 @@ Attributes::Attributes(attr_list* a, IntrusivePtr<BroType> t, bool arg_in_record
 	// the necessary checking gets done.
 
 	for ( const auto& attr : *a )
-		AddAttr({NewRef{}, attr});
+		AddAttr({zeek::NewRef{}, attr});
 
 	delete a;
 	}
 
-Attributes::~Attributes()
-	{
-	for ( const auto& attr : *attrs )
-		Unref(attr);
+Attributes::Attributes(TypePtr t, bool arg_in_record, bool is_global)
+    : Attributes(std::vector<AttrPtr>{}, std::move(t),
+                 arg_in_record, is_global)
+    {}
 
-	delete attrs;
+Attributes::Attributes(std::vector<AttrPtr> a,
+                       TypePtr t, bool arg_in_record, bool is_global)
+	: type(std::move(t))
+	{
+	attrs_list.resize(a.size());
+	attrs.reserve(a.size());
+	in_record = arg_in_record;
+	global_var = is_global;
+
+	SetLocationInfo(&start_location, &end_location);
+
+	// We loop through 'a' and add each attribute individually,
+	// rather than just taking over 'a' for ourselves, so that
+	// the necessary checking gets done.
+
+	for ( auto& attr : a )
+		AddAttr(std::move(attr));
 	}
 
-void Attributes::AddAttr(IntrusivePtr<Attr> attr)
+void Attributes::AddAttr(AttrPtr attr)
 	{
-	if ( ! attrs )
-		attrs = new attr_list(1);
-
 	// We overwrite old attributes by deleting them first.
 	RemoveAttr(attr->Tag());
-	attrs->push_back(IntrusivePtr{attr}.release());
+	attrs_list.push_back(attr.get());
+	attrs.emplace_back(attr);
 
 	// We only check the attribute after we've added it, to facilitate
 	// generating error messages via Attributes::Describe.
@@ -176,72 +207,97 @@ void Attributes::AddAttr(IntrusivePtr<Attr> attr)
 	// For ADD_FUNC or DEL_FUNC, add in an implicit REDEF, since
 	// those attributes only have meaning for a redefinable value.
 	if ( (attr->Tag() == ATTR_ADD_FUNC || attr->Tag() == ATTR_DEL_FUNC) &&
-	     ! FindAttr(ATTR_REDEF) )
-		attrs->push_back(new Attr(ATTR_REDEF));
+	     ! Find(ATTR_REDEF) )
+		{
+		auto a = zeek::make_intrusive<Attr>(ATTR_REDEF);
+		attrs_list.push_back(a.get());
+		attrs.emplace_back(std::move(a));
+		}
 
 	// For DEFAULT, add an implicit OPTIONAL if it's not a global.
 	if ( ! global_var && attr->Tag() == ATTR_DEFAULT &&
-	     ! FindAttr(ATTR_OPTIONAL) )
-		attrs->push_back(new Attr(ATTR_OPTIONAL));
+	     ! Find(ATTR_OPTIONAL) )
+		{
+		auto a = zeek::make_intrusive<Attr>(ATTR_OPTIONAL);
+		attrs_list.push_back(a.get());
+		attrs.emplace_back(std::move(a));
+		}
+	}
+
+void Attributes::AddAttrs(const AttributesPtr& a)
+	{
+	for ( const auto& attr : a->GetAttrs() )
+		AddAttr(attr);
 	}
 
 void Attributes::AddAttrs(Attributes* a)
 	{
-	attr_list* as = a->Attrs();
-	for ( const auto& attr : *as )
-		AddAttr({NewRef{}, attr});
+	for ( const auto& attr : a->GetAttrs() )
+		AddAttr(attr);
 
 	Unref(a);
 	}
 
-Attr* Attributes::FindAttr(attr_tag t) const
+Attr* Attributes::FindAttr(AttrTag t) const
 	{
-	if ( ! attrs )
-		return nullptr;
-
-	for ( const auto& a : *attrs )
-		{
+	for ( const auto& a : attrs )
 		if ( a->Tag() == t )
-			return a;
-		}
+			return a.get();
 
 	return nullptr;
 	}
 
-void Attributes::RemoveAttr(attr_tag t)
+const AttrPtr& Attributes::Find(AttrTag t) const
 	{
-	for ( int i = 0; i < attrs->length(); i++ )
-		if ( (*attrs)[i]->Tag() == t )
-			attrs->remove_nth(i--);
+	for ( const auto& a : attrs )
+		if ( a->Tag() == t )
+			return a;
+
+	return Attr::nil;
+	}
+
+void Attributes::RemoveAttr(AttrTag t)
+	{
+	for ( int i = 0; i < attrs_list.length(); i++ )
+		if ( attrs_list[i]->Tag() == t )
+			attrs_list.remove_nth(i--);
+
+	for ( auto it = attrs.begin(); it != attrs.end(); )
+		{
+		if ( (*it)->Tag() == t )
+			it = attrs.erase(it);
+		else
+			++it;
+		}
 	}
 
 void Attributes::Describe(ODesc* d) const
 	{
-	if ( ! attrs )
+	if ( attrs.empty() )
 		{
 		d->AddCount(0);
 		return;
 		}
 
-	d->AddCount(attrs->length());
+	d->AddCount(static_cast<uint64_t>(attrs.size()));
 
-	loop_over_list(*attrs, i)
+	for ( size_t i = 0; i < attrs.size(); ++i )
 		{
 		if ( (d->IsReadable() || d->IsPortable()) && i > 0 )
 			d->Add(", ");
 
-		(*attrs)[i]->Describe(d);
+		attrs[i]->Describe(d);
 		}
 	}
 
 void Attributes::DescribeReST(ODesc* d, bool shorten) const
 	{
-	loop_over_list(*attrs, i)
+	for ( size_t i = 0; i < attrs.size(); ++i )
 		{
 		if ( i > 0 )
 			d->Add(" ");
 
-		(*attrs)[i]->DescribeReST(d, shorten);
+		attrs[i]->DescribeReST(d, shorten);
 		}
 	}
 
@@ -262,10 +318,10 @@ void Attributes::CheckAttr(Attr* a)
 		{
 		bool is_add = a->Tag() == ATTR_ADD_FUNC;
 
-		BroType* at = a->AttrExpr()->Type();
+		const auto& at = a->GetExpr()->GetType();
 		if ( at->Tag() != TYPE_FUNC )
 			{
-			a->AttrExpr()->Error(
+			a->GetExpr()->Error(
 				is_add ?
 					"&add_func must be a function" :
 					"&delete_func must be a function");
@@ -273,9 +329,9 @@ void Attributes::CheckAttr(Attr* a)
 			}
 
 		FuncType* aft = at->AsFuncType();
-		if ( ! same_type(aft->YieldType(), type.get()) )
+		if ( ! same_type(aft->Yield(), type) )
 			{
-			a->AttrExpr()->Error(
+			a->GetExpr()->Error(
 				is_add ?
 					"&add_func function must yield same type as variable" :
 					"&delete_func function must yield same type as variable");
@@ -294,11 +350,11 @@ void Attributes::CheckAttr(Attr* a)
 			break;
 			}
 
-		BroType* atype = a->AttrExpr()->Type();
+		const auto& atype = a->GetExpr()->GetType();
 
 		if ( type->Tag() != TYPE_TABLE || (type->IsSet() && ! in_record) )
 			{
-			if ( same_type(atype, type.get()) )
+			if ( same_type(atype, type) )
 				// Ok.
 				break;
 
@@ -314,7 +370,7 @@ void Attributes::CheckAttr(Attr* a)
 				// Ok.
 				break;
 
-			auto e = check_and_promote_expr(a->AttrExpr(), type.get());
+			auto e = check_and_promote_expr(a->GetExpr().get(), type.get());
 
 			if ( e )
 				{
@@ -323,12 +379,12 @@ void Attributes::CheckAttr(Attr* a)
 				break;
 				}
 
-			a->AttrExpr()->Error("&default value has inconsistent type", type.get());
+			a->GetExpr()->Error("&default value has inconsistent type", type.get());
 			return;
 			}
 
 		TableType* tt = type->AsTableType();
-		BroType* ytype = tt->YieldType();
+		const auto& ytype = tt->Yield();
 
 		if ( ! in_record )
 			{
@@ -339,8 +395,8 @@ void Attributes::CheckAttr(Attr* a)
 				if ( atype->Tag() == TYPE_FUNC )
 					{
 					FuncType* f = atype->AsFuncType();
-					if ( ! f->CheckArgs(tt->IndexTypes()) ||
-					     ! same_type(f->YieldType(), ytype) )
+					if ( ! f->CheckArgs(tt->GetIndexTypes()) ||
+					     ! same_type(f->Yield(), ytype) )
 						Error("&default function type clash");
 
 					// Ok.
@@ -354,7 +410,7 @@ void Attributes::CheckAttr(Attr* a)
 					// Ok.
 					break;
 
-				auto e = check_and_promote_expr(a->AttrExpr(), ytype);
+				auto e = check_and_promote_expr(a->GetExpr().get(), ytype.get());
 
 				if ( e )
 					{
@@ -374,13 +430,13 @@ void Attributes::CheckAttr(Attr* a)
 			{
 			// &default applies to record field.
 
-			if ( same_type(atype, type.get()) )
+			if ( same_type(atype, type) )
 				// Ok.
 				break;
 
 			if ( (atype->Tag() == TYPE_TABLE && atype->AsTableType()->IsUnspecifiedTable()) )
 				{
-				auto e = check_and_promote_expr(a->AttrExpr(), type.get());
+				auto e = check_and_promote_expr(a->GetExpr().get(), type.get());
 
 				if ( e )
 					{
@@ -402,6 +458,15 @@ void Attributes::CheckAttr(Attr* a)
 		break;
 
 	case ATTR_EXPIRE_READ:
+		{
+		if ( Find(ATTR_BROKER_STORE) )
+			Error("&broker_store and &read_expire cannot be used simultaneously");
+
+		if ( Find(ATTR_BACKEND) )
+			Error("&backend and &read_expire cannot be used simultaneously");
+		}
+		// fallthrough
+
 	case ATTR_EXPIRE_WRITE:
 	case ATTR_EXPIRE_CREATE:
 		{
@@ -412,15 +477,13 @@ void Attributes::CheckAttr(Attr* a)
 			}
 
 		int num_expires = 0;
-		if ( attrs )
+
+		for ( const auto& a : attrs )
 			{
-			for ( const auto& a : *attrs )
-				{
-				if ( a->Tag() == ATTR_EXPIRE_READ ||
-				     a->Tag() == ATTR_EXPIRE_WRITE ||
-				     a->Tag() == ATTR_EXPIRE_CREATE )
-					num_expires++;
-				}
+			if ( a->Tag() == ATTR_EXPIRE_READ ||
+				 a->Tag() == ATTR_EXPIRE_WRITE ||
+				 a->Tag() == ATTR_EXPIRE_CREATE )
+				num_expires++;
 			}
 
 		if ( num_expires > 1 )
@@ -446,14 +509,14 @@ void Attributes::CheckAttr(Attr* a)
 			break;
 			}
 
-		const Expr* expire_func = a->AttrExpr();
+		const auto& expire_func = a->GetExpr();
 
-		if ( expire_func->Type()->Tag() != TYPE_FUNC )
+		if ( expire_func->GetType()->Tag() != TYPE_FUNC )
 			Error("&expire_func attribute is not a function");
 
-		const FuncType* e_ft = expire_func->Type()->AsFuncType();
+		const FuncType* e_ft = expire_func->GetType()->AsFuncType();
 
-		if ( e_ft->YieldType()->Tag() != TYPE_INTERVAL )
+		if ( e_ft->Yield()->Tag() != TYPE_INTERVAL )
 			{
 			Error("&expire_func must yield a value of type interval");
 			break;
@@ -464,42 +527,51 @@ void Attributes::CheckAttr(Attr* a)
 		if (the_table->IsUnspecifiedTable())
 			break;
 
-		const type_list* func_index_types = e_ft->ArgTypes()->Types();
+		const auto& func_index_types = e_ft->ParamList()->GetTypes();
 		// Keep backwards compatibility with idx: any idiom.
-		if ( func_index_types->length() == 2 )
+		if ( func_index_types.size() == 2 )
 			{
-			if ((*func_index_types)[1]->Tag() == TYPE_ANY)
+			if (func_index_types[1]->Tag() == TYPE_ANY)
 				break;
 			}
 
-		const type_list* table_index_types = the_table->IndexTypes();
+		const auto& table_index_types = the_table->GetIndexTypes();
 
-		type_list expected_args;
+		type_list expected_args(1 + static_cast<int>(table_index_types.size()));
 		expected_args.push_back(type->AsTableType());
-		for (const auto& t : *table_index_types)
-			expected_args.push_back(t);
+
+		for ( const auto& t : table_index_types )
+			expected_args.push_back(t.get());
 
 		if ( ! e_ft->CheckArgs(&expected_args) )
 			Error("&expire_func argument type clash");
-		}
+
+		if ( Find(ATTR_BROKER_STORE ) )
+			Error("&broker_store and &expire_func cannot be used simultaneously");
+
+		if ( Find(ATTR_BACKEND ) )
+			Error("&backend and &expire_func cannot be used simultaneously");
+
 		break;
+		}
+
 
 	case ATTR_ON_CHANGE:
 		{
 		if ( type->Tag() != TYPE_TABLE )
 			{
-			Error("&on_change only applicable to tables");
+			Error("&on_change only applicable to sets/tables");
 			break;
 			}
 
-		const Expr* change_func = a->AttrExpr();
+		const auto& change_func = a->GetExpr();
 
-		if ( change_func->Type()->Tag() != TYPE_FUNC || change_func->Type()->AsFuncType()->Flavor() != FUNC_FLAVOR_FUNCTION )
+		if ( change_func->GetType()->Tag() != TYPE_FUNC || change_func->GetType()->AsFuncType()->Flavor() != FUNC_FLAVOR_FUNCTION )
 			Error("&on_change attribute is not a function");
 
-		const FuncType* c_ft = change_func->Type()->AsFuncType();
+		const FuncType* c_ft = change_func->GetType()->AsFuncType();
 
-		if ( c_ft->YieldType()->Tag() != TYPE_VOID )
+		if ( c_ft->Yield()->Tag() != TYPE_VOID )
 			{
 			Error("&on_change must not return a value");
 			break;
@@ -510,30 +582,30 @@ void Attributes::CheckAttr(Attr* a)
 		if ( the_table->IsUnspecifiedTable() )
 			break;
 
-		const type_list* args = c_ft->ArgTypes()->Types();
-		const type_list* t_indexes = the_table->IndexTypes();
-		if ( args->length() != ( type->IsSet() ? 2 : 3 ) + t_indexes->length() )
+		const auto& args = c_ft->ParamList()->GetTypes();
+		const auto& t_indexes = the_table->GetIndexTypes();
+		if ( args.size() != ( type->IsSet() ? 2 : 3 ) + t_indexes.size() )
 			{
 			Error("&on_change function has incorrect number of arguments");
 			break;
 			}
 
-		if ( ! same_type((*args)[0], the_table->AsTableType()) )
+		if ( ! same_type(args[0], the_table->AsTableType()) )
 			{
 			Error("&on_change: first argument must be of same type as table");
 			break;
 			}
 
 		// can't check exact type here yet - the data structures don't exist yet.
-		if ( (*args)[1]->Tag() != TYPE_ENUM )
+		if ( args[1]->Tag() != TYPE_ENUM )
 			{
 			Error("&on_change: second argument must be a TableChange enum");
 			break;
 			}
 
-		for ( int i = 0; i < t_indexes->length(); i++ )
+		for ( size_t i = 0; i < t_indexes.size(); i++ )
 			{
-			if ( ! same_type((*args)[2+i], (*t_indexes)[i]) )
+			if ( ! same_type(args[2+i], t_indexes[i]) )
 				{
 				Error("&on_change: index types do not match table");
 				break;
@@ -541,13 +613,105 @@ void Attributes::CheckAttr(Attr* a)
 			}
 
 		if ( ! type->IsSet() )
-			if ( ! same_type((*args)[2+t_indexes->length()], the_table->YieldType()) )
+			if ( ! same_type(args[2+t_indexes.size()], the_table->Yield()) )
 				{
 				Error("&on_change: value type does not match table");
 				break;
 				}
 		}
 		break;
+
+	case ATTR_BACKEND:
+		{
+		if ( ! global_var || type->Tag() != TYPE_TABLE )
+			{
+			Error("&backend only applicable to global sets/tables");
+			break;
+			}
+
+		// cannot do better equality check - the Broker types are not
+		// actually existing yet when we are here. We will do that
+		// later - before actually attaching to a broker store
+		if ( a->GetExpr()->GetType()->Tag() != TYPE_ENUM )
+			{
+			Error("&backend must take an enum argument");
+			break;
+			}
+
+		// Temporary since Broker does not support ListVals - and we
+		// cannot easily convert to set/vector
+		if ( type->AsTableType()->GetIndexTypes().size() != 1 )
+			Error("&backend only supports one-element set/table indexes");
+
+		// Only support atomic types for the moment, unless
+		// explicitly overriden
+		if ( ! type->AsTableType()->IsSet() &&
+		     ! input::Manager::IsCompatibleType(type->AsTableType()->Yield().get(), true) &&
+		     ! Find(ATTR_BROKER_STORE_ALLOW_COMPLEX) )
+			{
+			Error("&backend only supports atomic types as table value");
+			}
+
+		if ( Find(ATTR_EXPIRE_FUNC ) )
+			Error("&backend and &expire_func cannot be used simultaneously");
+
+		if ( Find(ATTR_EXPIRE_READ) )
+			Error("&backend and &read_expire cannot be used simultaneously");
+
+		if ( Find(ATTR_BROKER_STORE) )
+			Error("&backend and &broker_store cannot be used simultaneously");
+
+		break;
+		}
+
+	case ATTR_BROKER_STORE:
+		{
+		if ( type->Tag() != TYPE_TABLE )
+			{
+			Error("&broker_store only applicable to sets/tables");
+			break;
+			}
+
+		if ( a->GetExpr()->GetType()->Tag() != TYPE_STRING )
+			{
+			Error("&broker_store must take a string argument");
+			break;
+			}
+
+		// Temporary since Broker does not support ListVals - and we
+		// cannot easily convert to set/vector
+		if ( type->AsTableType()->GetIndexTypes().size() != 1 && ! Find(ATTR_BROKER_STORE_ALLOW_COMPLEX) )
+			Error("&broker_store only supports one-element set/table indexes");
+
+		// Only support atomic types for the moment, unless
+		// explicitly overriden
+		if ( ! type->AsTableType()->IsSet() &&
+		     ! input::Manager::IsCompatibleType(type->AsTableType()->Yield().get(), true) &&
+		     ! Find(ATTR_BROKER_STORE_ALLOW_COMPLEX) )
+			{
+			Error("&broker_store only supports atomic types as table value");
+			}
+
+		if ( Find(ATTR_EXPIRE_FUNC ) )
+			Error("&broker_store and &expire_func cannot be used simultaneously");
+
+		if ( Find(ATTR_EXPIRE_READ) )
+			Error("&broker_store and &read_expire cannot be used simultaneously");
+
+		if ( Find(ATTR_BACKEND) )
+			Error("&backend and &broker_store cannot be used simultaneously");
+
+		break;
+		}
+
+	case ATTR_BROKER_STORE_ALLOW_COMPLEX:
+		{
+		if ( type->Tag() != TYPE_TABLE )
+			{
+			Error("&broker_allow_complex_type only applicable to sets/tables");
+			break;
+			}
+		}
 
 	case ATTR_TRACKED:
 		// FIXME: Check here for global ID?
@@ -587,7 +751,7 @@ void Attributes::CheckAttr(Attr* a)
 			break;
 			}
 
-		BroType* atype = a->AttrExpr()->Type();
+		const auto& atype = a->GetExpr()->GetType();
 
 		if ( atype->Tag() != TYPE_STRING ) {
 			Error("type column needs to have a string argument");
@@ -605,15 +769,15 @@ void Attributes::CheckAttr(Attr* a)
 
 bool Attributes::operator==(const Attributes& other) const
 	{
-	if ( ! attrs )
-		return other.attrs;
+	if ( attrs.empty() )
+		return other.attrs.empty();
 
-	if ( ! other.attrs )
+	if ( other.attrs.empty() )
 		return false;
 
-	for ( const auto& a : *attrs )
+	for ( const auto& a : attrs )
 		{
-		Attr* o = other.FindAttr(a->Tag());
+		const auto& o = other.Find(a->Tag());
 
 		if ( ! o )
 			return false;
@@ -622,9 +786,9 @@ bool Attributes::operator==(const Attributes& other) const
 			return false;
 		}
 
-	for ( const auto& o : *other.attrs )
+	for ( const auto& o : other.attrs )
 		{
-		Attr* a = FindAttr(o->Tag());
+		const auto& a = Find(o->Tag());
 
 		if ( ! a )
 			return false;
@@ -635,3 +799,5 @@ bool Attributes::operator==(const Attributes& other) const
 
 	return true;
 	}
+
+}

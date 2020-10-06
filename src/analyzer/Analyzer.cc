@@ -7,7 +7,7 @@
 #include "binpac.h"
 
 #include "analyzer/protocol/pia/PIA.h"
-#include "../BroString.h"
+#include "../ZeekString.h"
 #include "../Event.h"
 
 namespace analyzer {
@@ -134,6 +134,20 @@ void Analyzer::CtorInit(const Tag& arg_tag, Connection* arg_conn)
 Analyzer::~Analyzer()
 	{
 	assert(finished);
+
+	// Make sure any late entries into the analyzer tree are handled (e.g.
+	// from some Done() implementation).
+	LOOP_OVER_GIVEN_CHILDREN(i, new_children)
+		{
+		if ( ! (*i)->finished )
+			(*i)->Done();
+		}
+
+	// Deletion of new_children done in separate loop in case a Done()
+	// implementation tries to inspect analyzer tree w/ assumption that
+	// all analyzers are still valid.
+	LOOP_OVER_GIVEN_CHILDREN(i, new_children)
+		delete *i;
 
 	LOOP_OVER_CHILDREN(i)
 		delete *i;
@@ -687,13 +701,8 @@ void Analyzer::ProtocolConfirmation(Tag arg_tag)
 	if ( ! protocol_confirmation )
 		return;
 
-	EnumVal* tval = arg_tag ? arg_tag.AsEnumVal() : tag.AsEnumVal();
-
-	mgr.Enqueue(protocol_confirmation,
-		ConnVal(),
-		IntrusivePtr{NewRef{}, tval},
-		val_mgr->Count(id)
-	);
+	const auto& tval = arg_tag ? arg_tag.AsVal() : tag.AsVal();
+	mgr.Enqueue(protocol_confirmation, ConnVal(), tval, zeek::val_mgr->Count(id));
 	}
 
 void Analyzer::ProtocolViolation(const char* reason, const char* data, int len)
@@ -701,27 +710,21 @@ void Analyzer::ProtocolViolation(const char* reason, const char* data, int len)
 	if ( ! protocol_violation )
 		return;
 
-	StringVal* r;
+	zeek::StringValPtr r;
 
 	if ( data && len )
 		{
 		const char *tmp = copy_string(reason);
-		r = new StringVal(fmt("%s [%s%s]", tmp,
-					fmt_bytes(data, min(40, len)),
-					len > 40 ? "..." : ""));
+		r = zeek::make_intrusive<zeek::StringVal>(fmt("%s [%s%s]", tmp,
+		                                              fmt_bytes(data, min(40, len)),
+		                                              len > 40 ? "..." : ""));
 		delete [] tmp;
 		}
 	else
-		r = new StringVal(reason);
+		r = zeek::make_intrusive<zeek::StringVal>(reason);
 
-	EnumVal* tval = tag.AsEnumVal();
-
-	mgr.Enqueue(protocol_violation,
-		ConnVal(),
-		IntrusivePtr{NewRef{}, tval},
-		val_mgr->Count(id),
-		IntrusivePtr{AdoptRef{}, r}
-	);
+	const auto& tval = tag.AsVal();
+	mgr.Enqueue(protocol_violation, ConnVal(), tval, zeek::val_mgr->Count(id), std::move(r));
 	}
 
 void Analyzer::AddTimer(analyzer_timer_func timer, double t,
@@ -780,18 +783,18 @@ unsigned int Analyzer::MemoryAllocation() const
 	return mem;
 	}
 
-void Analyzer::UpdateConnVal(RecordVal *conn_val)
+void Analyzer::UpdateConnVal(zeek::RecordVal *conn_val)
 	{
 	LOOP_OVER_CHILDREN(i)
 		(*i)->UpdateConnVal(conn_val);
 	}
 
-RecordVal* Analyzer::BuildConnVal()
+zeek::RecordVal* Analyzer::BuildConnVal()
 	{
 	return conn->ConnVal()->Ref()->AsRecordVal();
 	}
 
-const IntrusivePtr<RecordVal>& Analyzer::ConnVal()
+const zeek::RecordValPtr& Analyzer::ConnVal()
 	{
 	return conn->ConnVal();
 	}
@@ -801,10 +804,10 @@ void Analyzer::Event(EventHandlerPtr f, const char* name)
 	conn->Event(f, this, name);
 	}
 
-void Analyzer::Event(EventHandlerPtr f, Val* v1, Val* v2)
+void Analyzer::Event(EventHandlerPtr f, zeek::Val* v1, zeek::Val* v2)
 	{
-	IntrusivePtr val1{AdoptRef{}, v1};
-	IntrusivePtr val2{AdoptRef{}, v2};
+	zeek::IntrusivePtr val1{zeek::AdoptRef{}, v1};
+	zeek::IntrusivePtr val2{zeek::AdoptRef{}, v2};
 
 	if ( f )
 		conn->EnqueueEvent(f, this, conn->ConnVal(), std::move(val1), std::move(val2));
@@ -923,12 +926,12 @@ void TransportLayerAnalyzer::Done()
 	}
 
 void TransportLayerAnalyzer::SetContentsFile(unsigned int /* direction */,
-						BroFile* /* f */)
+                                             BroFilePtr /* f */)
 	{
 	reporter->Error("analyzer type does not support writing to a contents file");
 	}
 
-BroFile* TransportLayerAnalyzer::GetContentsFile(unsigned int /* direction */) const
+BroFilePtr TransportLayerAnalyzer::GetContentsFile(unsigned int /* direction */) const
 	{
 	reporter->Error("analyzer type does not support writing to a contents file");
 	return nullptr;
@@ -938,8 +941,8 @@ void TransportLayerAnalyzer::PacketContents(const u_char* data, int len)
 	{
 	if ( packet_contents && len > 0 )
 		{
-		BroString* cbs = new BroString(data, len, true);
-		auto contents = make_intrusive<StringVal>(cbs);
+		zeek::String* cbs = new zeek::String(data, len, true);
+		auto contents = zeek::make_intrusive<zeek::StringVal>(cbs);
 		EnqueueConnEvent(packet_contents, ConnVal(), std::move(contents));
 		}
 	}

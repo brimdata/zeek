@@ -4,26 +4,11 @@
 #include "util.h"
 #include "util-config.h"
 
-#ifdef TIME_WITH_SYS_TIME
-# include <sys/time.h>
-# include <time.h>
-#else
-# ifdef HAVE_SYS_TIME_H
-#  include <sys/time.h>
-# else
-#  include <time.h>
-# endif
-#endif
-
 #ifdef HAVE_DARWIN
 #include <mach/task.h>
 #include <mach/mach_init.h>
 #endif
 
-#include <string>
-#include <array>
-#include <vector>
-#include <algorithm>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +27,12 @@
 #ifdef HAVE_MALLINFO
 # include <malloc.h>
 #endif
+
+#include <string>
+#include <array>
+#include <vector>
+#include <algorithm>
+#include <iostream>
 
 #include "Desc.h"
 #include "Dict.h"
@@ -899,31 +890,26 @@ bool ensure_intermediate_dirs(const char* dirname)
 
 bool ensure_dir(const char *dirname)
 	{
+	if ( mkdir(dirname, 0700) == 0 )
+		return true;
+
+	auto mkdir_errno = errno;
 	struct stat st;
-	if ( stat(dirname, &st) < 0 )
-		{
-		if ( errno != ENOENT )
-			{
-			reporter->Warning("can't stat directory %s: %s",
-				dirname, strerror(errno));
-			return false;
-			}
 
-		if ( mkdir(dirname, 0700) < 0 )
-			{
-			reporter->Warning("can't create directory %s: %s",
-				dirname, strerror(errno));
-			return false;
-			}
-		}
-
-	else if ( ! S_ISDIR(st.st_mode) )
+	if ( stat(dirname, &st) == -1 )
 		{
-		reporter->Warning("%s exists but is not a directory", dirname);
+		// Show the original failure reason for mkdir() since nothing's there
+		// or we can't even tell what is now.
+		reporter->Warning("can't create directory %s: %s",
+		                  dirname, strerror(mkdir_errno));
 		return false;
 		}
 
-	return true;
+	if ( S_ISDIR(st.st_mode) )
+		return true;
+
+	reporter->Warning("%s exists but is not a directory", dirname);
+	return false;
 	}
 
 bool is_dir(const std::string& path)
@@ -1069,24 +1055,29 @@ static bool write_random_seeds(const char* write_file, uint32_t seed,
 	}
 
 static bool bro_rand_determistic = false;
-static unsigned int bro_rand_state = 0;
+static long int bro_rand_state = 0;
 static bool first_seed_saved = false;
 static unsigned int first_seed = 0;
 
 static void bro_srandom(unsigned int seed, bool deterministic)
 	{
-	bro_rand_state = seed;
+	bro_rand_state = seed == 0 ? 1 : seed;
 	bro_rand_determistic = deterministic;
 
 	srandom(seed);
 	}
 
-void bro_srandom(unsigned int seed)
+void zeek::seed_random(unsigned int seed)
 	{
 	if ( bro_rand_determistic )
-		bro_rand_state = seed;
+		bro_rand_state = seed == 0 ? 1 : seed;
 	else
 		srandom(seed);
+	}
+
+void bro_srandom(unsigned int seed)
+	{
+	zeek::seed_random(seed);
 	}
 
 void init_random_seed(const char* read_file, const char* write_file,
@@ -1108,17 +1099,16 @@ void init_random_seed(const char* read_file, const char* write_file,
 	else if ( use_empty_seeds )
 		seeds_done = true;
 
-#ifdef HAVE_GETRANDOM
-	if ( ! seeds_done )
-		{
-		ssize_t nbytes = getrandom(buf.data(), sizeof(buf), 0);
-		seeds_done = nbytes == ssize_t(sizeof(buf));
-		}
-#endif
-
 #ifndef __MINGW32__
 	if ( ! seeds_done )
 		{
+#ifdef HAVE_GETRANDOM
+		// getrandom() guarantees reads up to 256 bytes are always successful,
+		assert(sizeof(buf) < 256);
+		auto nbytes = getrandom(buf.data(), sizeof(buf), 0);
+		assert(nbytes == sizeof(buf));
+		pos += nbytes / sizeof(uint32_t);
+#else
 		// Gather up some entropy.
 		gettimeofday((struct timeval *)(buf.data() + pos), 0);
 		pos += sizeof(struct timeval) / sizeof(uint32_t);
@@ -1145,9 +1135,10 @@ void init_random_seed(const char* read_file, const char* write_file,
 				// systems due to a lack of entropy.
 				errno = 0;
 			}
+#endif
 
 		if ( pos < KeyedHash::SEED_INIT_SIZE )
-			reporter->FatalError("Could not read enough random data from /dev/urandom. Wanted %d, got %lu", KeyedHash::SEED_INIT_SIZE, pos);
+			reporter->FatalError("Could not read enough random data. Wanted %d, got %lu", KeyedHash::SEED_INIT_SIZE, pos);
 
 		if ( ! seed )
 			{
@@ -1188,31 +1179,55 @@ bool have_random_seed()
 	return bro_rand_determistic;
 	}
 
-unsigned int bro_prng(unsigned int  state)
+constexpr uint32_t zeek_prng_mod = 2147483647;
+constexpr uint32_t zeek_prng_max = zeek_prng_mod - 1;
+
+long int zeek::max_random()
 	{
-	// Use our own simple linear congruence PRNG to make sure we are
-	// predictable across platforms.
-	static const long int m = 2147483647;
-	static const long int a = 16807;
-	const long int q = m / a;
-	const long int r = m % a;
-
-	state = a * ( state % q ) - r * ( state / q );
-
-	if ( state <= 0 )
-		state += m;
-
-	return state;
+	return bro_rand_determistic ? zeek_prng_max : RAND_MAX;
 	}
 
-long int bro_random()
+long int zeek::prng(long int state)
+	{
+	// Use our own simple linear congruence PRNG to make sure we are
+	// predictable across platforms.  (Lehmer RNG, Schrage's method)
+	// Note: the choice of "long int" storage type for the state is mostly
+	// for parity with the possible return values of random().
+	constexpr uint32_t m = zeek_prng_mod;
+	constexpr uint32_t a = 16807;
+	constexpr uint32_t q = m / a;
+	constexpr uint32_t r = m % a;
+
+	uint32_t rem = state % q;
+	uint32_t div = state / q;
+	int32_t s = a * rem;
+	int32_t t = r * div;
+	int32_t res = s - t;
+
+	if ( res < 0 )
+		res += m;
+
+	return res;
+	}
+
+unsigned int bro_prng(unsigned int  state)
+	{
+	return zeek::prng(state);
+	}
+
+long int zeek::random_number()
 	{
 	if ( ! bro_rand_determistic )
 		return random(); // Use system PRNG.
 
-	bro_rand_state = bro_prng(bro_rand_state);
+	bro_rand_state = zeek::prng(bro_rand_state);
 
 	return bro_rand_state;
+	}
+
+long int bro_random()
+	{
+	return zeek::random_number();
 	}
 
 // Returns a 64-bit random string.
@@ -1222,7 +1237,7 @@ uint64_t rand64bit()
 	int i;
 
 	for ( i = 1; i <= 4; ++i )
-		base = (base<<16) | bro_random();
+		base = (base<<16) | zeek::random_number();
 	return base;
 	}
 
@@ -1530,6 +1545,10 @@ TEST_CASE("util tokenize_string")
 	auto svs = tokenize_string("one,two,three,four,", ',');
 	std::vector<std::string_view> expect{"one", "two", "three", "four", ""};
 	CHECK(svs == expect);
+
+	auto letters = tokenize_string("a--b--c--d", "--");
+	CHECK(*letters == vector<string>({ "a", "b", "c", "d" }));
+	delete letters;
 	}
 
 vector<string>* tokenize_string(std::string_view input, std::string_view delim,
@@ -1546,7 +1565,7 @@ vector<string>* tokenize_string(std::string_view input, std::string_view delim,
 		{
 		++found;
 		rval->emplace_back(input.substr(pos, n - pos));
-		pos = n + 1;
+		pos = n + delim.size();
 
 		if ( limit && found == limit )
 			break;
@@ -1831,7 +1850,7 @@ string find_script_file(const string& filename, const string& path_set)
 	return string();
 	}
 
-FILE* rotate_file(const char* name, RecordVal* rotate_info)
+FILE* rotate_file(const char* name, zeek::RecordVal* rotate_info)
 	{
 	// Build file names.
 	const int buflen = strlen(name) + 128;
@@ -1877,10 +1896,10 @@ FILE* rotate_file(const char* name, RecordVal* rotate_info)
 	// Init rotate_info.
 	if ( rotate_info )
 		{
-		rotate_info->Assign(0, new StringVal(name));
-		rotate_info->Assign(1, new StringVal(newname));
-		rotate_info->Assign(2, new Val(network_time, TYPE_TIME));
-		rotate_info->Assign(3, new Val(network_time, TYPE_TIME));
+		rotate_info->Assign<zeek::StringVal>(0, name);
+		rotate_info->Assign<zeek::StringVal>(1, newname);
+		rotate_info->Assign<zeek::TimeVal>(2, network_time);
+		rotate_info->Assign<zeek::TimeVal>(3, network_time);
 		}
 
 	return newf;
@@ -1900,7 +1919,7 @@ double parse_rotate_base_time(const char* rotate_base_time)
 		{
 		struct tm t;
 		if ( ! strptime(rotate_base_time, "%H:%M", &t) )
-			reporter->Warning("calc_next_rotate(): can't parse rotation base time");
+			reporter->Error("calc_next_rotate(): can't parse rotation base time");
 		else
 			base = t.tm_min * 60 + t.tm_hour * 60 * 60;
 		}
@@ -2106,7 +2125,7 @@ uint64_t calculate_unique_id(size_t pool)
 			gettimeofday(&unique.time, 0);
 			unique.pool = (uint64_t) pool;
 			unique.pid = getpid();
-			unique.rnd = bro_random();
+			unique.rnd = static_cast<int>(zeek::random_number());
 
 			uid_instance = HashKey::HashBytes(&unique, sizeof(unique));
 			++uid_instance; // Now it's larger than zero.
@@ -2385,7 +2404,12 @@ char* zeekenv(const char* name)
 	auto val = getenv(it->second);
 
 	if ( val && starts_with(it->second, "BRO_") )
-		reporter->Warning("Using legacy environment variable %s, support will be removed in Zeek v4.1; use %s instead", it->second, name);
+		{
+		if ( reporter )
+			reporter->Warning("Using legacy environment variable %s, support will be removed in Zeek v4.1; use %s instead", it->second, name);
+		else
+			fprintf(stderr, "Using legacy environment variable %s, support will be removed in Zeek v4.1; use %s instead\n", it->second, name);
+		}
 
 	return val;
 	}

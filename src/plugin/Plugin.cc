@@ -17,11 +17,11 @@
 #include "../input.h"
 #include "threading/SerialTypes.h"
 
-using namespace plugin;
+using namespace zeek::plugin;
 
-const char* plugin::hook_name(HookType h)
+const char* zeek::plugin::hook_name(zeek::plugin::HookType h)
 {
-	static const char* hook_names[int(NUM_HOOKS) + 1] = {
+static constexpr const char* hook_names[int(zeek::plugin::NUM_HOOKS) + 1] = {
 		// Order must match that of HookType.
 		"LoadFile",
 		"CallFunction",
@@ -145,6 +145,17 @@ void HookArgument::Describe(ODesc* d) const
 			{
 			d->Add("(");
 			describe_vals(arg.vals, d);
+			d->Add(")");
+			}
+		else
+			d->Add("<null>");
+		break;
+
+	case ARG_LIST:
+		if ( arg.args)
+			{
+			d->Add("(");
+			describe_vals(*arg.args, d);
 			d->Add(")");
 			}
 		else
@@ -308,7 +319,7 @@ Plugin::component_list Plugin::Components() const
 	return components;
 	}
 
-static bool component_cmp(const Component* a, const Component* b)
+static bool component_cmp(const zeek::plugin::Component* a, const zeek::plugin::Component* b)
 	{
 	return a->Name() < b->Name();
 	}
@@ -325,7 +336,7 @@ void Plugin::AddBifItem(const std::string& name, BifItem::Type type)
 	bif_items.push_back(bi);
 	}
 
-void Plugin::AddComponent(Component* c)
+void Plugin::AddComponent(zeek::plugin::Component* c)
 	{
 	components.push_back(c);
 
@@ -339,12 +350,12 @@ Plugin::hook_list Plugin::EnabledHooks() const
 	return plugin_mgr->HooksEnabledForPlugin(this);
 	}
 
-void Plugin::EnableHook(HookType hook, int priority)
+void Plugin::EnableHook(zeek::plugin::HookType hook, int priority)
 	{
 	plugin_mgr->EnableHook(hook, this, priority);
 	}
 
-void Plugin::DisableHook(HookType hook)
+void Plugin::DisableHook(zeek::plugin::HookType hook)
 	{
 	plugin_mgr->DisableHook(hook, this);
 	}
@@ -354,7 +365,7 @@ void Plugin::RequestEvent(EventHandlerPtr handler)
 	plugin_mgr->RequestEvent(handler, this);
 	}
 
-void Plugin::RequestBroObjDtor(BroObj* obj)
+void Plugin::RequestBroObjDtor(Obj* obj)
 	{
 	plugin_mgr->RequestBroObjDtor(obj, this);
 	}
@@ -364,9 +375,30 @@ int Plugin::HookLoadFile(const LoadType type, const std::string& file, const std
 	return -1;
 	}
 
-std::pair<bool, Val*> Plugin::HookCallFunction(const Func* func, Frame *parent, val_list* args)
+std::pair<bool, zeek::ValPtr>
+Plugin::HookFunctionCall(const zeek::Func* func, zeek::detail::Frame* parent,
+                         zeek::Args* args)
 	{
-	std::pair<bool, Val*> result(false, NULL);
+	val_list vlargs(args->size());
+
+	for ( auto& v : *args )
+		vlargs.push_back(v.release());
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+	auto [handled, result] = HookCallFunction(func, parent, &vlargs);
+#pragma GCC diagnostic pop
+
+	for ( auto i = 0u; i < args->size(); ++i )
+		(*args)[i] = {zeek::AdoptRef{}, vlargs[i]};
+
+	return {handled, {zeek::AdoptRef{}, result}};
+	}
+
+std::pair<bool, zeek::Val*> Plugin::HookCallFunction(
+	const zeek::Func* func, zeek::detail::Frame *parent, val_list* args)
+	{
+	std::pair<bool, zeek::Val*> result(false, NULL);
 	return result;
 	}
 
@@ -408,18 +440,19 @@ bool Plugin::HookLogWrite(const std::string& writer, const std::string& filter,
 	}
 
 bool Plugin::HookReporter(const std::string& prefix, const EventHandlerPtr event,
-			  const Connection* conn, const val_list* addl, bool location,
-			  const Location* location1, const Location* location2,
-			  bool time, const std::string& message)
+                          const Connection* conn, const val_list* addl, bool location,
+                          const zeek::detail::Location* location1,
+                          const zeek::detail::Location* location2,
+                          bool time, const std::string& message)
 	{
 	return true;
 	}
 
-void Plugin::MetaHookPre(HookType hook, const HookArgumentList& args)
+void Plugin::MetaHookPre(zeek::plugin::HookType hook, const HookArgumentList& args)
 	{
 	}
 
-void Plugin::MetaHookPost(HookType hook, const HookArgumentList& args, HookArgument result)
+void Plugin::MetaHookPost(zeek::plugin::HookType hook, const HookArgumentList& args, HookArgument result)
 	{
 	}
 
@@ -524,4 +557,3 @@ void Plugin::Describe(ODesc* d) const
 		d->Add(")\n");
 		}
 	}
-

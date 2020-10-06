@@ -8,7 +8,6 @@
 
 #include <assert.h>
 #include <string.h>
-#include <stdint.h>
 #include <sys/types.h> // for u_char
 #include <cstdint>
 
@@ -252,7 +251,7 @@ private:
 	DataBlockMap block_map;
 };
 
-class Reassembler : public BroObj {
+class Reassembler : public zeek::Obj {
 public:
 	Reassembler(uint64_t init_seq, ReassemblerType reassem_type = REASSEM_UNKNOWN);
 	~Reassembler() override	{}

@@ -8,6 +8,7 @@
 #include <broker/endpoint.hh>
 #include <broker/endpoint_info.hh>
 #include <broker/peer_info.hh>
+#include <broker/publisher_id.hh>
 #include <broker/backend.hh>
 #include <broker/backend_options.hh>
 #include <broker/detail/hash.hh>
@@ -17,11 +18,19 @@
 #include <string>
 #include <unordered_map>
 
+#include "IntrusivePtr.h"
 #include "iosource/IOSource.h"
 #include "logging/WriterBackend.h"
 
-class Frame;
-class Func;
+ZEEK_FORWARD_DECLARE_NAMESPACED(Func, zeek);
+ZEEK_FORWARD_DECLARE_NAMESPACED(Frame, zeek::detail);
+ZEEK_FORWARD_DECLARE_NAMESPACED(VectorType, zeek);
+ZEEK_FORWARD_DECLARE_NAMESPACED(TableVal, zeek);
+
+namespace zeek {
+using VectorTypePtr = zeek::IntrusivePtr<zeek::VectorType>;
+using TableValPtr = zeek::IntrusivePtr<zeek::TableVal>;
+}
 
 namespace bro_broker {
 
@@ -162,7 +171,7 @@ public:
 	 * a Broker::Event record type.
 	 * @return true if the message is sent successfully.
 	 */
-	bool PublishEvent(std::string topic, RecordVal* ev);
+	bool PublishEvent(std::string topic, zeek::RecordVal* ev);
 
 	/**
 	 * Send a message to create a log stream to any interested peers.
@@ -177,7 +186,7 @@ public:
 	 * @param peer If given, send the message only to this peer.
 	 * @return true if the message is sent successfully.
 	 */
-	bool PublishLogCreate(EnumVal* stream, EnumVal* writer,
+	bool PublishLogCreate(zeek::EnumVal* stream, zeek::EnumVal* writer,
 	                      const logging::WriterBackend::WriterInfo& info,
 	                      int num_fields,
 	                      const threading::Field* const * fields,
@@ -194,8 +203,9 @@ public:
 	 * See the Broker::SendFlags record type.
 	 * @return true if the message is sent successfully.
 	 */
-	bool PublishLogWrite(EnumVal* stream, EnumVal* writer, std::string path, int num_vals,
-			     const threading::Value* const * vals);
+	bool PublishLogWrite(zeek::EnumVal* stream, zeek::EnumVal* writer,
+	                     std::string path, int num_vals,
+	                     const threading::Value* const * vals);
 
 	/**
 	 * Automatically send an event to any interested peers whenever it is
@@ -206,7 +216,7 @@ public:
 	 * @param event a Bro event value.
 	 * @return true if automatic event sending is now enabled.
 	 */
-	bool AutoPublishEvent(std::string topic, Val* event);
+	bool AutoPublishEvent(std::string topic, zeek::Val* event);
 
 	/**
 	 * Stop automatically sending an event to peers upon local dispatch.
@@ -214,7 +224,7 @@ public:
 	 * @param event an event originally given to bro_broker::Manager::AutoPublish().
 	 * @return true if automatic events will no occur for the topic/event pair.
 	 */
-	bool AutoUnpublishEvent(const std::string& topic, Val* event);
+	bool AutoUnpublishEvent(const std::string& topic, zeek::Val* event);
 
 	/**
 	 * Create an `Event` record value from an event and its arguments.
@@ -224,7 +234,7 @@ public:
 	 * @return an `Event` record value.  If an invalid event or arguments
 	 * were supplied the optional "name" field will not be set.
 	 */
-	RecordVal* MakeEvent(val_list* args, Frame* frame);
+	zeek::RecordVal* MakeEvent(val_list* args, zeek::detail::Frame* frame);
 
 	/**
 	 * Register interest in peer event messages that use a certain topic prefix.
@@ -295,6 +305,17 @@ public:
 	StoreHandleVal* LookupStore(const std::string& name);
 
 	/**
+	 * Register a Zeek table that is associated with a Broker store that is backing it. This
+	 * causes all changes that happen to the Broker store in the future to be applied to theZzeek
+	 * table.
+	 * A single Broker store can only be forwarded to a single table.
+	 * @param name name of the Broker store.
+	 * @param table pointer to the table/set that is being backed.
+	 * @return true on success, false if the named store is already being forwarded.
+	 */
+	bool AddForwardedStore(const std::string& name, zeek::TableValPtr table);
+
+	/**
 	 * Close and unregister a data store.  Any existing references to the
 	 * store handle will not be able to be used for any data store operations.
 	 * @param name the stores' name.
@@ -339,6 +360,10 @@ public:
 private:
 
 	void DispatchMessage(const broker::topic& topic, broker::data msg);
+	// Process events used for Broker store backed zeek tables
+	void ProcessStoreEvent(broker::data msg);
+	// Common functionality for processing insert and update events.
+	void ProcessStoreEventInsertUpdate(const zeek::TableValPtr& table, const std::string& store_id, const broker::data& key, const broker::data& data, const broker::data& old_value, bool insert);
 	void ProcessEvent(const broker::topic& topic, broker::zeek::Event ev);
 	bool ProcessLogCreate(broker::zeek::LogCreate lc);
 	bool ProcessLogWrite(broker::zeek::LogWrite lw);
@@ -347,6 +372,13 @@ private:
 	void ProcessError(broker::error err);
 	void ProcessStoreResponse(StoreHandleVal*, broker::store::response response);
 	void FlushPendingQueries();
+	// Initializes the masters for Broker backed Zeek tables when using the &backend attribute
+	void InitializeBrokerStoreForwarding();
+	// Check if a Broker store is associated to a table on the Zeek side.
+	void PrepareForwarding(const std::string& name);
+	// Send the content of a Broker store to the backing table. This is typically used
+	// when a master/clone is created.
+	void BrokerStoreToZeekTable(const std::string& name, const StoreHandleVal* handle);
 
 	void Error(const char* format, ...)
 		__attribute__((format (printf, 2, 3)));
@@ -381,6 +413,7 @@ private:
 	std::string default_log_topic_prefix;
 	std::shared_ptr<BrokerState> bstate;
 	std::unordered_map<std::string, StoreHandleVal*> data_stores;
+	std::unordered_map<std::string, zeek::TableValPtr> forwarded_stores;
 	std::unordered_map<query_id, StoreQueryCallback*,
 	                   query_id_hasher> pending_queries;
 	std::vector<std::string> forwarded_prefixes;
@@ -393,10 +426,12 @@ private:
 	int peer_count;
 
 	size_t log_batch_size;
-	Func* log_topic_func;
-	VectorType* vector_of_data_type;
-	EnumType* log_id_type;
-	EnumType* writer_id_type;
+	zeek::Func* log_topic_func;
+	zeek::VectorTypePtr vector_of_data_type;
+	zeek::EnumType* log_id_type;
+	zeek::EnumType* writer_id_type;
+	bool zeek_table_manager = false;
+	std::string zeek_table_db_directory;
 
 	static int script_scope;
 };

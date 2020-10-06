@@ -16,14 +16,15 @@ namespace input { namespace reader {
 // Description for input field mapping.
 struct FieldMapping {
 	std::string name;
-	TypeTag type;
-	TypeTag subtype; // internal type for sets and vectors
+	zeek::TypeTag type;
+	zeek::TypeTag subtype; // internal type for sets and vectors
 	int position;
 	int secondary_position; // for ports: pos of the second field
 	bool present;
 
-	FieldMapping(const std::string& arg_name, const TypeTag& arg_type, int arg_position);
-	FieldMapping(const std::string& arg_name, const TypeTag& arg_type, const TypeTag& arg_subtype, int arg_position);
+	FieldMapping(const std::string& arg_name, const zeek::TypeTag& arg_type, int arg_position);
+	FieldMapping(const std::string& arg_name, const zeek::TypeTag& arg_type, const zeek::TypeTag& arg_subtype, int arg_position);
+
 	FieldMapping(const FieldMapping& arg);
 	FieldMapping() { position = -1; secondary_position = -1; }
 

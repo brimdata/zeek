@@ -30,9 +30,9 @@ extern "C" {
 #include <pcap.h>
 }
 
-namespace analyzer { namespace arp {
+namespace analyzer::arp {
 
-class ARP_Analyzer : public BroObj {
+class ARP_Analyzer : public zeek::Obj {
 public:
 	ARP_Analyzer();
 	~ARP_Analyzer() override;
@@ -45,10 +45,16 @@ public:
 			const char* tpa, const char* tha);
 
 protected:
-	AddrVal* ConstructAddrVal(const void* addr);
-	StringVal* EthAddrToStr(const u_char* addr);
+
+	[[deprecated("Remove in v4.1.  Use ToAddrVal().")]]
+	zeek::AddrVal* ConstructAddrVal(const void* addr);
+	[[deprecated("Remove in v4.1.  Use ToEthAddrStr().")]]
+	zeek::StringVal* EthAddrToStr(const u_char* addr);
+
+	zeek::AddrValPtr ToAddrVal(const void* addr);
+	zeek::StringValPtr ToEthAddrStr(const u_char* addr);
 	void BadARP(const struct arp_pkthdr* hdr, const char* string);
 	void Corrupted(const char* string);
 };
 
-} } // namespace analyzer::* 
+} // namespace analyzer::arp

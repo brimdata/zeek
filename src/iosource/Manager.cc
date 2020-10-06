@@ -115,7 +115,7 @@ void Manager::FindReadySources(std::vector<IOSource*>* ready)
 
 	// If there aren't any sources and exit_only_after_terminate is false, just
 	// return an empty set of sources. We want the main loop to end.
-	if ( Size() == 0 && ( ! BifConst::exit_only_after_terminate || terminating ) )
+	if ( Size() == 0 && ( ! zeek::BifConst::exit_only_after_terminate || terminating ) )
 		return;
 
 	double timeout = -1;
@@ -370,10 +370,6 @@ PktSrc* Manager::OpenPktSrc(const std::string& path, bool is_live)
 
 	PktSrc* ps = (*component->Factory())(npath, is_live);
 	assert(ps);
-
-	if ( ! ps->IsOpen() && ps->IsError() )
-		// Set an error message if it didn't open successfully.
-		ps->Error("could not open");
 
 	DBG_LOG(DBG_PKTIO, "Created packet source of type %s for %s", component->Name().c_str(), npath.c_str());
 

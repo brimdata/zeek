@@ -1,3 +1,4 @@
+
 // See the file "COPYING" in the main distribution directory for copyright.
 
 #pragma once
@@ -5,13 +6,19 @@
 #include "zeek-config.h"
 #include "../Tag.h"
 
-class EnumVal;
+ZEEK_FORWARD_DECLARE_NAMESPACED(EnumVal, zeek);
 
+namespace zeek::plugin {
+	template <class T> class TaggedComponent;
+	template <class T, class C> class ComponentManager;
+}
 namespace plugin {
-template <class T>
-class TaggedComponent;
-template <class T, class C>
-class ComponentManager;
+	template <class T>
+	using TaggedComponent [[deprecated("Remove in v4.1. Use zeek::plugin::TaggedComponent instead.")]] =
+		zeek::plugin::TaggedComponent<T>;
+	template <class T, class C>
+	using ComponentManager [[deprecated("Remove in v4.1. Use zeek::plugin::ComponentManager instead.")]] =
+		zeek::plugin::ComponentManager<T, C>;
 }
 
 namespace analyzer {
@@ -83,14 +90,17 @@ public:
 	 *
 	 * @param etype the script-layer enum type associated with the tag.
 	 */
-	EnumVal* AsEnumVal() const;
+	const zeek::EnumValPtr& AsVal() const;
+
+	[[deprecated("Remove in v4.1.  Use AsVal() instead.")]]
+	zeek::EnumVal* AsEnumVal() const;
 
 	static const Tag Error;
 
 protected:
 	friend class analyzer::Manager;
-	friend class plugin::ComponentManager<Tag, Component>;
-	friend class plugin::TaggedComponent<Tag>;
+	friend class zeek::plugin::ComponentManager<Tag, Component>;
+	friend class zeek::plugin::TaggedComponent<Tag>;
 
 	/**
 	 * Constructor.
@@ -109,7 +119,10 @@ protected:
 	 *
 	 * @param val An enum value of script type \c Analyzer::Tag.
 	 */
-	explicit Tag(EnumVal* val) : ::Tag(val) {}
+	explicit Tag(zeek::EnumValPtr val);
+
+	[[deprecated("Remove in v4.1.  Construct from IntrusivePtr instead")]]
+	explicit Tag(zeek::EnumVal* val);
 };
 
 }

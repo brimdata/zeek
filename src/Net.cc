@@ -28,7 +28,7 @@ extern "C" {
 #include "Sessions.h"
 #include "Event.h"
 #include "Timer.h"
-#include "Var.h"
+#include "ID.h"
 #include "Reporter.h"
 #include "Scope.h"
 #include "Anon.h"
@@ -193,13 +193,13 @@ void net_init(const std::optional<std::string>& interface,
 			reporter->FatalError("problem opening dump file %s (%s)",
 					     writefile, pkt_dumper->ErrorMsg());
 
-		if ( ID* id = global_scope()->Lookup("trace_output_file") )
-			id->SetVal(make_intrusive<StringVal>(writefile));
+		if ( const auto& id = zeek::detail::global_scope()->Find("trace_output_file") )
+			id->SetVal(zeek::make_intrusive<zeek::StringVal>(writefile));
 		else
 			reporter->Error("trace_output_file not defined in bro.init");
 		}
 
-	init_ip_addr_anonymizers();
+	zeek::detail::init_ip_addr_anonymizers();
 
 	sessions = new NetSessions();
 
@@ -248,7 +248,7 @@ void net_packet_dispatch(double t, const Packet* pkt, iosource::PktSrc* src_ps)
 		if ( load_freq == 0 )
 			load_freq = uint32_t(0xffffffff) / uint32_t(load_sample_freq);
 
-		if ( uint32_t(bro_random() & 0xffffffff) < load_freq )
+		if ( uint32_t(zeek::random_number() & 0xffffffff) < load_freq )
 			{
 			// Drain the queued timer events so they're not
 			// charged against this sample.
@@ -283,7 +283,7 @@ void net_run()
 	ready.reserve(iosource_mgr->TotalSize());
 
 	while ( iosource_mgr->Size() ||
-		(BifConst::exit_only_after_terminate && ! terminating) )
+		(zeek::BifConst::exit_only_after_terminate && ! terminating) )
 		{
 		iosource_mgr->FindReadySources(&ready);
 
@@ -314,8 +314,8 @@ void net_run()
 				}
 			}
 		else if ( (have_pending_timers || communication_enabled ||
-		           BifConst::exit_only_after_terminate) &&
-			  ! pseudo_realtime )
+		           zeek::BifConst::exit_only_after_terminate) &&
+		          ! pseudo_realtime )
 			{
 			// Take advantage of the lull to get up to
 			// date on timers and events.  Because we only
@@ -330,6 +330,8 @@ void net_run()
 		processing_start_time = 0.0;	// = "we're not processing now"
 		current_dispatched = 0;
 		current_iosrc = nullptr;
+
+		extern int signal_val;
 
 		if ( signal_val == SIGTERM || signal_val == SIGINT )
 			// We received a signal while processing the
@@ -407,8 +409,8 @@ void net_delete()
 
 	delete sessions;
 
-	for ( int i = 0; i < NUM_ADDR_ANONYMIZATION_METHODS; ++i )
-		delete ip_anonymizer[i];
+	for ( int i = 0; i < zeek::detail::NUM_ADDR_ANONYMIZATION_METHODS; ++i )
+		delete zeek::detail::ip_anonymizer[i];
 	}
 
 int _processing_suspended = 0;

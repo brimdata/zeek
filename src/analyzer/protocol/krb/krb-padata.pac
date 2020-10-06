@@ -7,13 +7,13 @@
 %}
 
 %header{
-VectorVal* proc_padata(const KRB_PA_Data_Sequence* data, const BroAnalyzer bro_analyzer, bool is_error);
+zeek::VectorValPtr proc_padata(const KRB_PA_Data_Sequence* data, const BroAnalyzer bro_analyzer, bool is_error);
 %}
 
 %code{
-VectorVal* proc_padata(const KRB_PA_Data_Sequence* data, const BroAnalyzer bro_analyzer, bool is_error)
+zeek::VectorValPtr proc_padata(const KRB_PA_Data_Sequence* data, const BroAnalyzer bro_analyzer, bool is_error)
 {
-	VectorVal* vv = new VectorVal(internal_type("KRB::Type_Value_Vector")->AsVectorType());
+	auto vv = zeek::make_intrusive<zeek::VectorVal>(zeek::id::find_type<zeek::VectorType>("KRB::Type_Value_Vector"));
 
 	if ( ! data->data()->has_padata() )
 		return vv;
@@ -36,26 +36,26 @@ VectorVal* proc_padata(const KRB_PA_Data_Sequence* data, const BroAnalyzer bro_a
 				break;
 			case PA_PW_SALT:
 				{
-				RecordVal * type_val = new RecordVal(BifType::Record::KRB::Type_Value);
-				type_val->Assign(0, val_mgr->Count(element->data_type()));
+				auto type_val = zeek::make_intrusive<zeek::RecordVal>(zeek::BifType::Record::KRB::Type_Value);
+				type_val->Assign(0, zeek::val_mgr->Count(element->data_type()));
 				type_val->Assign(1, to_stringval(element->pa_data_element()->pa_pw_salt()->encoding()->content()));
-				vv->Assign(vv->Size(), type_val);
+				vv->Assign(vv->Size(), std::move(type_val));
 				break;
 				}
 			case PA_ENCTYPE_INFO:
 				{
-				RecordVal * type_val = new RecordVal(BifType::Record::KRB::Type_Value);
-				type_val->Assign(0, val_mgr->Count(element->data_type()));
+				auto type_val = zeek::make_intrusive<zeek::RecordVal>(zeek::BifType::Record::KRB::Type_Value);
+				type_val->Assign(0, zeek::val_mgr->Count(element->data_type()));
 				type_val->Assign(1, to_stringval(element->pa_data_element()->pf_enctype_info()->salt()));
-				vv->Assign(vv->Size(), type_val);
+				vv->Assign(vv->Size(), std::move(type_val));
 				break;
 				}
 			case PA_ENCTYPE_INFO2:
 				{
-				RecordVal * type_val = new RecordVal(BifType::Record::KRB::Type_Value);
-				type_val->Assign(0, val_mgr->Count(element->data_type()));
+				auto type_val = zeek::make_intrusive<zeek::RecordVal>(zeek::BifType::Record::KRB::Type_Value);
+				type_val->Assign(0, zeek::val_mgr->Count(element->data_type()));
 				type_val->Assign(1, to_stringval(element->pa_data_element()->pf_enctype_info2()->salt()));
-				vv->Assign(vv->Size(), type_val);
+				vv->Assign(vv->Size(), std::move(type_val));
 				break;
 				}
 			case PA_PW_AS_REQ:
@@ -110,10 +110,10 @@ VectorVal* proc_padata(const KRB_PA_Data_Sequence* data, const BroAnalyzer bro_a
 				{
 				if ( ! is_error && element->pa_data_element()->unknown()->meta()->length() > 0 )
 					{
-					RecordVal * type_val = new RecordVal(BifType::Record::KRB::Type_Value);
-					type_val->Assign(0, val_mgr->Count(element->data_type()));
+					auto type_val = zeek::make_intrusive<zeek::RecordVal>(zeek::BifType::Record::KRB::Type_Value);
+					type_val->Assign(0, zeek::val_mgr->Count(element->data_type()));
 					type_val->Assign(1, to_stringval(element->pa_data_element()->unknown()->content()));
-					vv->Assign(vv->Size(), type_val);
+					vv->Assign(vv->Size(), std::move(type_val));
 					}
 				break;
 				}
@@ -192,7 +192,7 @@ type KRB_PA_Data_Element(is_orig: bool, type: int64, length: uint64) = case type
 };
 
 type KRB_PA_AP_REQ_wrapper(is_orig: bool) = record {
-	# Not sure what these two field are, but they need to be 
+	# Not sure what these two field are, but they need to be
 	# here for pre-auth ap-req messages.
 	some_meta1 : ASN1EncodingMeta;
 	some_meta2 : ASN1EncodingMeta;

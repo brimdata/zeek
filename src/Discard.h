@@ -4,9 +4,16 @@
 
 #include <sys/types.h> // for u_char
 
+#include "IntrusivePtr.h"
+
 class IP_Hdr;
-class Val;
-class Func;
+
+ZEEK_FORWARD_DECLARE_NAMESPACED(Func, zeek);
+ZEEK_FORWARD_DECLARE_NAMESPACED(Val, zeek);
+
+namespace zeek {
+using FuncPtr = zeek::IntrusivePtr<Func>;
+}
 
 class Discarder {
 public:
@@ -18,12 +25,12 @@ public:
 	bool NextPacket(const IP_Hdr* ip, int len, int caplen);
 
 protected:
-	Val* BuildData(const u_char* data, int hdrlen, int len, int caplen);
+	zeek::Val* BuildData(const u_char* data, int hdrlen, int len, int caplen);
 
-	Func* check_ip;
-	Func* check_tcp;
-	Func* check_udp;
-	Func* check_icmp;
+	zeek::FuncPtr check_ip;
+	zeek::FuncPtr check_tcp;
+	zeek::FuncPtr check_udp;
+	zeek::FuncPtr check_icmp;
 
 	// Maximum amount of application data passed to filtering functions.
 	int discarder_maxlen;

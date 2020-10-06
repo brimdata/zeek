@@ -10,17 +10,21 @@
 #include "Val.h"
 #include "NetVar.h"
 #include "Reporter.h"
+#include "Scope.h"
+#include "ID.h"
+#include "IPAddr.h"
 
+using namespace zeek::detail;
 
-AnonymizeIPAddr* ip_anonymizer[NUM_ADDR_ANONYMIZATION_METHODS] = {nullptr};
+AnonymizeIPAddr* zeek::detail::ip_anonymizer[NUM_ADDR_ANONYMIZATION_METHODS] = {nullptr};
 
 static uint32_t rand32()
 	{
-	return ((bro_random() & 0xffff) << 16) | (bro_random() & 0xffff);
+	return ((zeek::random_number() & 0xffff) << 16) | (zeek::random_number() & 0xffff);
 	}
 
 // From tcpdpriv.
-int bi_ffs(uint32_t value)
+static int bi_ffs(uint32_t value)
 	{
 	int add = 0;
 	static uint8_t bvals[] = {
@@ -354,42 +358,61 @@ AnonymizeIPAddr_A50::Node* AnonymizeIPAddr_A50::find_node(ipaddr32_t a)
 	return nullptr;
 	}
 
-void init_ip_addr_anonymizers()
+static zeek::TableValPtr anon_preserve_orig_addr;
+static zeek::TableValPtr anon_preserve_resp_addr;
+static zeek::TableValPtr anon_preserve_other_addr;
+
+void zeek::detail::init_ip_addr_anonymizers()
 	{
 	ip_anonymizer[KEEP_ORIG_ADDR] = nullptr;
 	ip_anonymizer[SEQUENTIALLY_NUMBERED] = new AnonymizeIPAddr_Seq();
 	ip_anonymizer[RANDOM_MD5] = new AnonymizeIPAddr_RandomMD5();
 	ip_anonymizer[PREFIX_PRESERVING_A50] = new AnonymizeIPAddr_A50();
 	ip_anonymizer[PREFIX_PRESERVING_MD5] = new AnonymizeIPAddr_PrefixMD5();
+
+	auto id = global_scope()->Find("preserve_orig_addr");
+
+	if ( id )
+		anon_preserve_orig_addr = zeek::cast_intrusive<zeek::TableVal>(id->GetVal());
+
+	id = global_scope()->Find("preserve_resp_addr");
+
+	if ( id )
+		anon_preserve_resp_addr = zeek::cast_intrusive<zeek::TableVal>(id->GetVal());
+
+	id = global_scope()->Find("preserve_other_addr");
+
+	if ( id )
+		anon_preserve_other_addr = zeek::cast_intrusive<zeek::TableVal>(id->GetVal());
 	}
 
-ipaddr32_t anonymize_ip(ipaddr32_t ip, enum ip_addr_anonymization_class_t cl)
+ipaddr32_t zeek::detail::anonymize_ip(ipaddr32_t ip, enum ip_addr_anonymization_class_t cl)
 	{
 	TableVal* preserve_addr = nullptr;
-	AddrVal addr(ip);
+	auto addr = zeek::make_intrusive<zeek::AddrVal>(ip);
 
 	int method = -1;
 
 	switch ( cl ) {
 	case ORIG_ADDR: // client address
-		preserve_addr = preserve_orig_addr;
+		preserve_addr = anon_preserve_orig_addr.get();
 		method = orig_addr_anonymization;
 		break;
 
 	case RESP_ADDR: // server address
-		preserve_addr = preserve_resp_addr;
+		preserve_addr = anon_preserve_resp_addr.get();
 		method = resp_addr_anonymization;
 		break;
 
 	default:
-		preserve_addr = preserve_other_addr;
+		preserve_addr = anon_preserve_other_addr.get();
 		method = other_addr_anonymization;
 		break;
 	}
 
 	ipaddr32_t new_ip = 0;
 
-	if ( preserve_addr && preserve_addr->Lookup(&addr) )
+	if ( preserve_addr && preserve_addr->FindOrDefault(addr) )
 		new_ip = ip;
 
 	else if ( method >= 0 && method < NUM_ADDR_ANONYMIZATION_METHODS )
@@ -418,12 +441,12 @@ ipaddr32_t anonymize_ip(ipaddr32_t ip, enum ip_addr_anonymization_class_t cl)
 #include "NetVar.h"
 #include "Event.h"
 
-void log_anonymization_mapping(ipaddr32_t input, ipaddr32_t output)
+void zeek::detail::log_anonymization_mapping(ipaddr32_t input, ipaddr32_t output)
 	{
 	if ( anonymization_mapping )
 		mgr.Enqueue(anonymization_mapping,
-			make_intrusive<AddrVal>(input),
-			make_intrusive<AddrVal>(output)
+		            zeek::make_intrusive<zeek::AddrVal>(input),
+			zeek::make_intrusive<AddrVal>(output)
 		);
 	}
 

@@ -1,5 +1,5 @@
 # When changing the minimum version here, also adapt
-# auxi/zeek-aux/plugin-support/skeleton/CMakeLists.txt
+# auxil/zeek-aux/plugin-support/skeleton/CMakeLists.txt
 cmake_minimum_required(VERSION 3.0 FATAL_ERROR)
 
 project(Zeek C CXX)
@@ -15,19 +15,9 @@ else ()
 endif ()
 
 if ( MINGW )
-    # Define NOGDI because GDI defines an ERROR macro.
-    set(flags "-DCAF_NO_THREAD_LOCAL -DNOGDI -DWIN32_LEAN_AND_MEAN -Duint=unsigned -I ${CMAKE_CURRENT_SOURCE_DIR}/src/windows/usr.include")
+    set(flags "-DCAF_NO_THREAD_LOCAL -Duint=unsigned -I ${CMAKE_CURRENT_SOURCE_DIR}/src/windows/usr.include")
     set(CMAKE_C_FLAGS "${flags} ${CMAKE_C_FLAGS}")
     set(CMAKE_CXX_FLAGS "${flags} ${CMAKE_CXX_FLAGS}")
-endif ()
-
-if ( NOT CMAKE_INSTALL_LIBDIR )
-    # Currently, some sub-projects may use GNUInstallDirs.cmake to choose the
-    # library install dir, while others just default to "lib".  For sake of
-    # consistency, this just overrides the former to always use "lib" in case
-    # it would have chosen something else, like "lib64", but a thing for the
-    # future may be to standardize all sub-projects to use GNUInstallDirs.
-    set(CMAKE_INSTALL_LIBDIR lib)
 endif ()
 
 if ( NOT CMAKE_INSTALL_LIBDIR )
@@ -209,12 +199,12 @@ FindRequiredPackage(FLEX)
 FindRequiredPackage(BISON)
 FindRequiredPackage(PCAP)
 FindRequiredPackage(OpenSSL)
-if (NOT WIN32)
+if ( NOT WIN32 )
     FindRequiredPackage(BIND)
 endif ()
 FindRequiredPackage(ZLIB)
 
-if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/auxi/binpac/CMakeLists.txt)
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/auxil/binpac/CMakeLists.txt)
 
     set(ENABLE_STATIC_ONLY_SAVED ${ENABLE_STATIC_ONLY})
 
@@ -222,13 +212,13 @@ if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/auxi/binpac/CMakeLists.txt)
       set(ENABLE_STATIC_ONLY true)
     endif()
 
-    add_subdirectory(auxi/binpac)
+    add_subdirectory(auxil/binpac)
     set(ENABLE_STATIC_ONLY ${ENABLE_STATIC_ONLY_SAVED})
 endif ()
 FindRequiredPackage(BinPAC)
 
 if ( NOT BIFCL_EXE_PATH )
-  add_subdirectory(auxi/bifcl)
+  add_subdirectory(auxil/bifcl)
 endif ()
 
 if (ENABLE_JEMALLOC)
@@ -256,7 +246,7 @@ if ( CAF_ROOT_DIR )
   find_package(CAF COMPONENTS core io openssl REQUIRED)
 endif ()
 
-add_subdirectory(auxi/paraglob)
+add_subdirectory(auxil/paraglob)
 set(zeekdeps ${zeekdeps} paraglob)
 
 if ( BROKER_ROOT_DIR )
@@ -278,7 +268,7 @@ else ()
     set(ENABLE_STATIC_ONLY true)
   endif()
 
-  add_subdirectory(auxi/broker)
+  add_subdirectory(auxil/broker)
   set(ENABLE_STATIC_ONLY ${ENABLE_STATIC_ONLY_SAVED})
 
   if ( BUILD_STATIC_BROKER )
@@ -286,17 +276,17 @@ else ()
   else()
     set(zeekdeps ${zeekdeps} broker)
   endif()
-  set(broker_includes ${CMAKE_CURRENT_SOURCE_DIR}/auxi/broker/include ${CMAKE_CURRENT_BINARY_DIR}/auxi/broker/include)
+  set(broker_includes ${CMAKE_CURRENT_SOURCE_DIR}/auxil/broker/include ${CMAKE_CURRENT_BINARY_DIR}/auxil/broker/include)
 endif ()
 
 # CAF_LIBRARIES and CAF_INCLUDE_DIRS are defined either by calling
-# find_package(CAF) or by calling add_subdirectory(auxi/broker). In either case,
+# find_package(CAF) or by calling add_subdirectory(auxil/broker). In either case,
 # we have to care about CAF here because Broker headers can pull in CAF
 # headers.
 set(zeekdeps ${zeekdeps} ${CAF_LIBRARIES})
 include_directories(BEFORE ${broker_includes} ${CAF_INCLUDE_DIRS})
-include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/auxi/paraglob/include)
-include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/auxi/rapidjson/include)
+include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/auxil/paraglob/include)
+include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/auxil/rapidjson/include)
 include_directories(BEFORE
                     ${PCAP_INCLUDE_DIR}
                     ${BIND_INCLUDE_DIR}
@@ -305,7 +295,7 @@ include_directories(BEFORE
                     ${JEMALLOC_INCLUDE_DIR}
 )
 
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/auxi/rapidjson/include/rapidjson
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/auxil/rapidjson/include/rapidjson
         DESTINATION include/zeek/3rdparty/rapidjson/include)
 
 # Optional Dependencies
@@ -360,20 +350,13 @@ endif ()
 include_directories(BEFORE ${OPENSSL_INCLUDE_DIR})
 
 # Make everyone find the highwayhash includes
-include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/auxi/highwayhash)
+include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/auxil/highwayhash)
 
-# Alpine support
-if ( ${CMAKE_SYSTEM_NAME} MATCHES Linux AND EXISTS /etc/os-release )
-    execute_process(
-        COMMAND grep -q alpine /etc/os-release
-        RESULT_VARIABLE os_release_alpine
-    )
-
-    if ( os_release_alpine EQUAL 0 )
-        find_package(FTS REQUIRED)
-        list(APPEND OPTLIBS ${FTS_LIBRARY})
-        include_directories(BEFORE ${FTS_INCLUDE_DIR})
-    endif ()
+# Determine if libfts is external to libc, i.e. musl
+find_package(FTS)
+if ( FTS_FOUND )
+    list(APPEND OPTLIBS ${FTS_LIBRARY})
+    include_directories(BEFORE ${FTS_INCLUDE_DIR})
 endif ()
 
 set(zeekdeps ${zeekdeps}
@@ -450,7 +433,7 @@ install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/zeek-config DESTINATION bin)
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/cmake DESTINATION share/zeek
         USE_SOURCE_PERMISSIONS)
 
-if (NOT WIN32)
+if ( NOT WIN32 )
     # Install wrapper script for Bro-to-Zeek renaming.
     include(InstallShellScript)
     include(InstallSymlink)
@@ -467,8 +450,9 @@ add_subdirectory(man)
 
 include(CheckOptionalBuildSources)
 
-CheckOptionalBuildSources(auxi/zeekctl   ZeekControl INSTALL_ZEEKCTL)
-CheckOptionalBuildSources(auxi/zeek-aux  Zeek-Aux  INSTALL_AUX_TOOLS)
+CheckOptionalBuildSources(auxil/zeekctl   ZeekControl INSTALL_ZEEKCTL)
+CheckOptionalBuildSources(auxil/zeek-aux  Zeek-Aux  INSTALL_AUX_TOOLS)
+CheckOptionalBuildSources(auxil/zeek-archiver ZeekArchiver INSTALL_ZEEK_ARCHIVER)
 
 ########################################################################
 ## Packaging Setup

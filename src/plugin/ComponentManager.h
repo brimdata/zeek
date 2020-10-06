@@ -4,7 +4,6 @@
 #include <list>
 #include <string>
 
-#include "IntrusivePtr.h"
 #include "Type.h"
 #include "Var.h" // for add_type()
 #include "Val.h"
@@ -13,7 +12,7 @@
 #include "zeekygen/Manager.h"
 #include "DebugLogger.h"
 
-namespace plugin {
+namespace zeek::plugin {
 
 /**
  * A class that manages tracking of plugin components (e.g. analyzers) and
@@ -52,7 +51,10 @@ public:
 	/**
 	 * @return The enum type associated with the script-layer "Tag".
 	 */
-	EnumType* GetTagEnumType() const;
+	const zeek::EnumTypePtr& GetTagType() const;
+
+	[[deprecated("Remove in v4.1.  Use GetTagType() instead.")]]
+	zeek::EnumType* GetTagEnumType() const;
 
 	/**
 	 * Get a component name from its tag.
@@ -68,6 +70,9 @@ public:
 	 * @param val A component's enum value.
 	 * @return The canonical component name.
 	 */
+	const std::string& GetComponentName(EnumValPtr val) const;
+
+	[[deprecated("Remove in v4.1.  Use IntrusivePtr argument instead.")]]
 	const std::string& GetComponentName(Val* val) const;
 
 	/**
@@ -122,7 +127,7 @@ public:
 
 private:
 	std::string module; /**< Script layer module in which component tags live. */
-	IntrusivePtr<EnumType> tag_enum_type; /**< Enum type of component tags. */
+	zeek::EnumTypePtr tag_enum_type; /**< Enum type of component tags. */
 	std::map<std::string, C*> components_by_name;
 	std::map<T, C*> components_by_tag;
 	std::map<int, C*> components_by_val;
@@ -131,9 +136,9 @@ private:
 template <class T, class C>
 ComponentManager<T, C>::ComponentManager(const std::string& arg_module, const std::string& local_id)
 	: module(arg_module),
-	  tag_enum_type(make_intrusive<EnumType>(module + "::" + local_id))
+	  tag_enum_type(zeek::make_intrusive<zeek::EnumType>(module + "::" + local_id))
 	{
-	auto id = install_ID(local_id.c_str(), module.c_str(), true, true);
+	auto id = zeek::detail::install_ID(local_id.c_str(), module.c_str(), true, true);
 	add_type(id.get(), tag_enum_type, nullptr);
 	zeekygen_mgr->Identifier(std::move(id));
 	}
@@ -157,7 +162,13 @@ std::list<C*> ComponentManager<T, C>::GetComponents() const
 	}
 
 template <class T, class C>
-EnumType* ComponentManager<T, C>::GetTagEnumType() const
+const zeek::EnumTypePtr& ComponentManager<T, C>::GetTagType() const
+	{
+	return tag_enum_type;
+	}
+
+template <class T, class C>
+zeek::EnumType* ComponentManager<T, C>::GetTagEnumType() const
 	{
 	return tag_enum_type.get();
 	}
@@ -181,9 +192,15 @@ const std::string& ComponentManager<T, C>::GetComponentName(T tag) const
 	}
 
 template <class T, class C>
+const std::string& ComponentManager<T, C>::GetComponentName(EnumValPtr val) const
+	{
+	return GetComponentName(T(std::move(val)));
+	}
+
+template <class T, class C>
 const std::string& ComponentManager<T, C>::GetComponentName(Val* val) const
 	{
-	return GetComponentName(T(val->AsEnumVal()));
+	return GetComponentName(T({zeek::NewRef{}, val->AsEnumVal()}));
 	}
 
 template <class T, class C>
@@ -239,13 +256,19 @@ void ComponentManager<T, C>::RegisterComponent(C* component,
 	components_by_name.insert(std::make_pair(cname, component));
 	components_by_tag.insert(std::make_pair(component->Tag(), component));
 	components_by_val.insert(std::make_pair(
-	        component->Tag().AsEnumVal()->InternalInt(), component));
+	        component->Tag().AsVal()->InternalInt(), component));
 
 	// Install an identfier for enum value
 	std::string id = fmt("%s%s", prefix.c_str(), cname.c_str());
 	tag_enum_type->AddName(module, id.c_str(),
-	                       component->Tag().AsEnumVal()->InternalInt(), true,
+	                       component->Tag().AsVal()->InternalInt(), true,
 	                       nullptr);
 	}
 
 } // namespace plugin
+
+namespace plugin {
+	template <class T, class C>
+	using ComponentManager [[deprecated("Remove in v4.1. Use zeek::plugin::ComponentManager instead.")]] =
+		zeek::plugin::ComponentManager<T, C>;
+}

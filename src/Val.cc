@@ -17,7 +17,7 @@
 #include <set>
 
 #include "Attr.h"
-#include "BroString.h"
+#include "ZeekString.h"
 #include "CompHash.h"
 #include "Dict.h"
 #include "Net.h"
@@ -34,32 +34,40 @@
 #include "Conn.h"
 #include "Reporter.h"
 #include "IPAddr.h"
-#include "Var.h" // for internal_type()
+#include "ID.h"
 
 #include "broker/Data.h"
+#include "broker/Store.h"
+#include "broker/Manager.h"
 
 #include "threading/formatters/JSON.h"
 
 using namespace std;
 
-Val::Val(Func* f)
-	: val(f), type(f->FType()->Ref())
-	{
-	::Ref(val.func_val);
-	}
+namespace zeek {
 
-static FileType* GetStringFileType() noexcept
+Val::Val(zeek::Func* f) : Val({NewRef{}, f})
+	{}
+
+Val::Val(zeek::FuncPtr f)
+	: val(f.release()), type(val.func_val->GetType())
+	{}
+
+static const FileTypePtr& GetStringFileType() noexcept
 	{
-	static FileType* string_file_type = nullptr;
-	if ( ! string_file_type )
-		string_file_type = new FileType(base_type(TYPE_STRING));
+	static auto string_file_type
+		= make_intrusive<FileType>(base_type(TYPE_STRING));
+
 	return string_file_type;
 	}
 
-Val::Val(BroFile* f)
-	: val(f), type(GetStringFileType()->Ref())
+Val::Val(BroFile* f) : Val({AdoptRef{}, f})
+	{}
+
+Val::Val(BroFilePtr f)
+	: val(f.release()), type(GetStringFileType())
 	{
-	assert(f->FType()->Tag() == TYPE_STRING);
+	assert(val.file_val->GetType()->Tag() == TYPE_STRING);
 	}
 
 Val::~Val()
@@ -73,25 +81,54 @@ Val::~Val()
 	else if ( type->Tag() == TYPE_FILE )
 		Unref(val.file_val);
 
-	Unref(type);
 #ifdef DEBUG
 	delete [] bound_id;
 #endif
 	}
 
-IntrusivePtr<Val> Val::CloneState::NewClone(Val* src, IntrusivePtr<Val> dst)
+#define CONVERTER(tag, ctype, name) \
+	ctype name() \
+		{ \
+		CHECK_TAG(type->Tag(), tag, "Val::CONVERTER", zeek::type_name) \
+		return (ctype)(this); \
+		}
+
+#define CONST_CONVERTER(tag, ctype, name) \
+	const ctype name() const \
+		{ \
+		CHECK_TAG(type->Tag(), tag, "Val::CONVERTER", zeek::type_name) \
+		return (const ctype)(this); \
+		}
+
+#define CONVERTERS(tag, ctype, name) \
+	CONVERTER(tag, ctype, name) \
+	CONST_CONVERTER(tag, ctype, name)
+
+CONVERTERS(zeek::TYPE_PATTERN, PatternVal*, Val::AsPatternVal)
+CONVERTERS(zeek::TYPE_PORT, PortVal*, Val::AsPortVal)
+CONVERTERS(zeek::TYPE_SUBNET, SubNetVal*, Val::AsSubNetVal)
+CONVERTERS(zeek::TYPE_ADDR, AddrVal*, Val::AsAddrVal)
+CONVERTERS(zeek::TYPE_TABLE, TableVal*, Val::AsTableVal)
+CONVERTERS(zeek::TYPE_RECORD, RecordVal*, Val::AsRecordVal)
+CONVERTERS(zeek::TYPE_LIST, ListVal*, Val::AsListVal)
+CONVERTERS(zeek::TYPE_STRING, StringVal*, Val::AsStringVal)
+CONVERTERS(zeek::TYPE_VECTOR, VectorVal*, Val::AsVectorVal)
+CONVERTERS(zeek::TYPE_ENUM, EnumVal*, Val::AsEnumVal)
+CONVERTERS(zeek::TYPE_OPAQUE, OpaqueVal*, Val::AsOpaqueVal)
+
+ValPtr Val::CloneState::NewClone(Val* src, ValPtr dst)
 	{
 	clones.insert(std::make_pair(src, dst.get()));
 	return dst;
 	}
 
-IntrusivePtr<Val> Val::Clone()
+ValPtr Val::Clone()
 	{
 	Val::CloneState state;
 	return Clone(&state);
 	}
 
-IntrusivePtr<Val> Val::Clone(CloneState* state)
+ValPtr Val::Clone(CloneState* state)
 	{
 	auto i = state->clones.find(this);
 
@@ -106,7 +143,7 @@ IntrusivePtr<Val> Val::Clone(CloneState* state)
 	return c;
 	}
 
-IntrusivePtr<Val> Val::DoClone(CloneState* state)
+ValPtr Val::DoClone(CloneState* state)
 	{
 	switch ( type->InternalType() ) {
 	case TYPE_INTERNAL_INT:
@@ -119,7 +156,7 @@ IntrusivePtr<Val> Val::DoClone(CloneState* state)
 		// Derived classes are responsible for this. Exception:
 		// Functions and files. There aren't any derived classes.
 		if ( type->Tag() == TYPE_FUNC )
-			return make_intrusive<Val>(AsFunc()->DoClone().get());
+			return make_intrusive<zeek::Val>(AsFunc()->DoClone());
 
 		if ( type->Tag() == TYPE_FILE )
 			{
@@ -149,6 +186,12 @@ IntrusivePtr<Val> Val::DoClone(CloneState* state)
 	reporter->InternalError("cannot be reached");
 	return nullptr;
  	}
+
+zeek::FuncPtr Val::AsFuncPtr() const
+	{
+	CHECK_TAG(type->Tag(), TYPE_FUNC, "Val::Func", type_name)
+	return {NewRef{}, val.func_val};
+	}
 
 bool Val::IsZero() const
 	{
@@ -247,36 +290,36 @@ double Val::CoerceToDouble() const
 	return 0.0;
 	}
 
-IntrusivePtr<Val> Val::SizeVal() const
+ValPtr Val::SizeVal() const
 	{
 	switch ( type->InternalType() ) {
 	case TYPE_INTERNAL_INT:
 		// Return abs value. However abs() only works on ints and llabs
 		// doesn't work on Mac OS X 10.5. So we do it by hand
 		if ( val.int_val < 0 )
-			return val_mgr->Count(-val.int_val);
+			return zeek::val_mgr->Count(-val.int_val);
 		else
-			return val_mgr->Count(val.int_val);
+			return zeek::val_mgr->Count(val.int_val);
 
 	case TYPE_INTERNAL_UNSIGNED:
-		return val_mgr->Count(val.uint_val);
+		return zeek::val_mgr->Count(val.uint_val);
 
 	case TYPE_INTERNAL_DOUBLE:
-		return make_intrusive<Val>(fabs(val.double_val), TYPE_DOUBLE);
+		return make_intrusive<zeek::DoubleVal>(fabs(val.double_val));
 
 	case TYPE_INTERNAL_OTHER:
 		if ( type->Tag() == TYPE_FUNC )
-			return val_mgr->Count(val.func_val->FType()->ArgTypes()->Types()->length());
+			return zeek::val_mgr->Count(val.func_val->GetType()->ParamList()->GetTypes().size());
 
 		if ( type->Tag() == TYPE_FILE )
-			return make_intrusive<Val>(val.file_val->Size(), TYPE_DOUBLE);
+			return make_intrusive<zeek::DoubleVal>(val.file_val->Size());
 		break;
 
 	default:
 		break;
 	}
 
-	return val_mgr->Count(0);
+	return zeek::val_mgr->Count(0);
 	}
 
 unsigned int Val::MemoryAllocation() const
@@ -338,7 +381,7 @@ void Val::ValDescribe(ODesc* d) const
 		else if ( type->Tag() == TYPE_FILE )
 			AsFile()->Describe(d);
 		else if ( type->Tag() == TYPE_TYPE )
-			d->Add(type->AsTypeType()->Type()->GetName());
+			d->Add(type->AsTypeType()->GetType()->GetName());
 		else
 			d->Add("<no value description>");
 		break;
@@ -370,19 +413,19 @@ void Val::ValDescribeReST(ODesc* d) const
 
 
 #ifdef DEBUG
-ID* Val::GetID() const
+detail::ID* Val::GetID() const
 	{
-	return bound_id ? global_scope()->Lookup(bound_id) : nullptr;
+	return bound_id ? zeek::detail::global_scope()->Find(bound_id).get() : nullptr;
 	}
 
-void Val::SetID(ID* id)
+void Val::SetID(detail::ID* id)
 	{
 	delete [] bound_id;
 	bound_id = id ? copy_string(id->Name()) : nullptr;
 	}
 #endif
 
-bool Val::WouldOverflow(const BroType* from_type, const BroType* to_type, const Val* val)
+bool Val::WouldOverflow(const zeek::Type* from_type, const zeek::Type* to_type, const Val* val)
 	{
 	if ( !to_type || !from_type )
 		return true;
@@ -410,14 +453,15 @@ bool Val::WouldOverflow(const BroType* from_type, const BroType* to_type, const 
 	return false;
 	}
 
-IntrusivePtr<TableVal> Val::GetRecordFields()
+TableValPtr Val::GetRecordFields()
 	{
-	auto t = Type();
+	static auto record_field_table = id::find_type<TableType>("record_field_table");
+	auto t = GetType().get();
 
 	if ( t->Tag() != TYPE_RECORD && t->Tag() != TYPE_TYPE )
 		{
 		reporter->Error("non-record value/type passed to record_fields");
-		return make_intrusive<TableVal>(IntrusivePtr{NewRef{}, internal_type("record_field_table")->AsTableType()});
+		return make_intrusive<zeek::TableVal>(record_field_table);
 		}
 
 	RecordType* rt = nullptr;
@@ -430,12 +474,12 @@ IntrusivePtr<TableVal> Val::GetRecordFields()
 		}
 	else
 		{
-		t = t->AsTypeType()->Type();
+		t = t->AsTypeType()->GetType().get();
 
 		if ( t->Tag() != TYPE_RECORD )
 			{
 			reporter->Error("non-record value/type passed to record_fields");
-			return make_intrusive<TableVal>(IntrusivePtr{NewRef{}, internal_type("record_field_table")->AsTableType()});
+			return make_intrusive<zeek::TableVal>(record_field_table);
 			}
 
 		rt = t->AsRecordType();
@@ -458,8 +502,8 @@ static void BuildJSON(threading::formatter::JSON::NullDoubleWriter& writer, Val*
 		}
 
 	rapidjson::Value j;
-	BroType* type = val->Type();
-	switch ( type->Tag() )
+
+	switch ( val->GetType()->Tag() )
 		{
 		case TYPE_BOOL:
 			writer.Bool(val->AsBool());
@@ -526,7 +570,7 @@ static void BuildJSON(threading::formatter::JSON::NullDoubleWriter& writer, Val*
 			auto* table = val->AsTable();
 			auto* tval = val->AsTableVal();
 
-			if ( tval->Type()->IsSet() )
+			if ( tval->GetType()->IsSet() )
 				writer.StartArray();
 			else
 				writer.StartObject();
@@ -536,11 +580,11 @@ static void BuildJSON(threading::formatter::JSON::NullDoubleWriter& writer, Val*
 			auto c = table->InitForIteration();
 			while ( (entry = table->NextEntry(k, c)) )
 				{
-				auto lv = tval->RecoverIndex(k);
+				auto lv = tval->RecreateIndex(*k);
 				delete k;
-				Val* entry_key = lv->Length() == 1 ? lv->Index(0) : lv.get();
+				Val* entry_key = lv->Length() == 1 ? lv->Idx(0).get() : lv.get();
 
-				if ( tval->Type()->IsSet() )
+				if ( tval->GetType()->IsSet() )
 					BuildJSON(writer, entry_key, only_loggable, re);
 				else
 					{
@@ -555,11 +599,11 @@ static void BuildJSON(threading::formatter::JSON::NullDoubleWriter& writer, Val*
 						// Strip quotes.
 						key_str = key_str.substr(1, key_str.length() - 2);
 
-					BuildJSON(writer, entry->Value(), only_loggable, re, key_str);
+					BuildJSON(writer, entry->GetVal().get(), only_loggable, re, key_str);
 					}
 				}
 
-			if ( tval->Type()->IsSet() )
+			if ( tval->GetType()->IsSet() )
 				writer.EndArray();
 			else
 				writer.EndObject();
@@ -572,22 +616,23 @@ static void BuildJSON(threading::formatter::JSON::NullDoubleWriter& writer, Val*
 			writer.StartObject();
 
 			auto* rval = val->AsRecordVal();
-			auto rt = rval->Type()->AsRecordType();
+			auto rt = rval->GetType()->AsRecordType();
 
 			for ( auto i = 0; i < rt->NumFields(); ++i )
 				{
-				auto value = rval->LookupWithDefault(i);
+				auto value = rval->GetFieldOrDefault(i);
 
-				if ( value && ( ! only_loggable || rt->FieldHasAttr(i, ATTR_LOG) ) )
+				if ( value && ( ! only_loggable || rt->FieldHasAttr(i, detail::ATTR_LOG) ) )
 					{
 					string key_str;
 					auto field_name = rt->FieldName(i);
 
 					if ( re && re->MatchAnywhere(field_name) != 0 )
 						{
-						auto blank = make_intrusive<StringVal>("");
-						auto fn_val = make_intrusive<StringVal>(field_name);
-						auto key_val = fn_val->Substitute(re, blank.get(), false);
+						auto blank = make_intrusive<zeek::StringVal>("");
+						auto fn_val = make_intrusive<zeek::StringVal>(field_name);
+						const auto& bs = *blank->AsString();
+						auto key_val = fn_val->Replace(re, bs, false);
 						key_str = key_val->ToStdString();
 						}
 					else
@@ -608,7 +653,7 @@ static void BuildJSON(threading::formatter::JSON::NullDoubleWriter& writer, Val*
 			auto* lval = val->AsListVal();
 			size_t size = lval->Length();
 			for (size_t i = 0; i < size; i++)
-				BuildJSON(writer, lval->Index(i), only_loggable, re);
+				BuildJSON(writer, lval->Idx(i).get(), only_loggable, re);
 
 			writer.EndArray();
 			break;
@@ -621,7 +666,7 @@ static void BuildJSON(threading::formatter::JSON::NullDoubleWriter& writer, Val*
 			auto* vval = val->AsVectorVal();
 			size_t size = vval->SizeVal()->AsCount();
 			for (size_t i = 0; i < size; i++)
-				BuildJSON(writer, vval->Lookup(i), only_loggable, re);
+				BuildJSON(writer, vval->At(i).get(), only_loggable, re);
 
 			writer.EndArray();
 			break;
@@ -645,19 +690,14 @@ static void BuildJSON(threading::formatter::JSON::NullDoubleWriter& writer, Val*
 		}
 	}
 
-IntrusivePtr<StringVal> Val::ToJSON(bool only_loggable, RE_Matcher* re)
+StringValPtr Val::ToJSON(bool only_loggable, RE_Matcher* re)
 	{
 	rapidjson::StringBuffer buffer;
 	threading::formatter::JSON::NullDoubleWriter writer(buffer);
 
 	BuildJSON(writer, this, only_loggable, re, "");
 
-	return make_intrusive<StringVal>(buffer.GetString());
-	}
-
-IntervalVal::IntervalVal(double quantity, double units) :
-	Val(quantity * units, TYPE_INTERVAL)
-	{
+	return make_intrusive<zeek::StringVal>(buffer.GetString());
 	}
 
 void IntervalVal::ValDescribe(ODesc* d) const
@@ -733,9 +773,9 @@ void IntervalVal::ValDescribe(ODesc* d) const
 		}
 	}
 
-IntrusivePtr<Val> PortVal::SizeVal() const
+ValPtr PortVal::SizeVal() const
 	{
-	return val_mgr->Int(val.uint_val);
+	return zeek::val_mgr->Int(val.uint_val);
 	}
 
 uint32_t PortVal::Mask(uint32_t port_num, TransportProto port_type)
@@ -814,7 +854,7 @@ void PortVal::ValDescribe(ODesc* d) const
 	d->Add(Protocol());
 	}
 
-IntrusivePtr<Val> PortVal::DoClone(CloneState* state)
+ValPtr PortVal::DoClone(CloneState* state)
 	{
 	// Immutable.
 	return {NewRef{}, this};
@@ -851,15 +891,15 @@ unsigned int AddrVal::MemoryAllocation() const
 	return padded_sizeof(*this) + val.addr_val->MemoryAllocation();
 	}
 
-IntrusivePtr<Val> AddrVal::SizeVal() const
+ValPtr AddrVal::SizeVal() const
 	{
 	if ( val.addr_val->GetFamily() == IPv4 )
-		return val_mgr->Count(32);
+		return zeek::val_mgr->Count(32);
 	else
-		return val_mgr->Count(128);
+		return zeek::val_mgr->Count(128);
 	}
 
-IntrusivePtr<Val> AddrVal::DoClone(CloneState* state)
+ValPtr AddrVal::DoClone(CloneState* state)
 	{
 	// Immutable.
 	return {NewRef{}, this};
@@ -911,10 +951,10 @@ unsigned int SubNetVal::MemoryAllocation() const
 	return padded_sizeof(*this) + val.subnet_val->MemoryAllocation();
 	}
 
-IntrusivePtr<Val> SubNetVal::SizeVal() const
+ValPtr SubNetVal::SizeVal() const
 	{
 	int retained = 128 - val.subnet_val->LengthIPv6();
-	return make_intrusive<Val>(pow(2.0, double(retained)), TYPE_DOUBLE);
+	return make_intrusive<zeek::DoubleVal>(pow(2.0, double(retained)));
 	}
 
 void SubNetVal::ValDescribe(ODesc* d) const
@@ -956,23 +996,23 @@ bool SubNetVal::Contains(const IPAddr& addr) const
 	return val.subnet_val->Contains(addr);
 	}
 
-IntrusivePtr<Val> SubNetVal::DoClone(CloneState* state)
+ValPtr SubNetVal::DoClone(CloneState* state)
 	{
 	// Immutable.
 	return {NewRef{}, this};
 	}
 
-StringVal::StringVal(BroString* s) : Val(s, TYPE_STRING)
+StringVal::StringVal(String* s) : Val(s, TYPE_STRING)
 	{
 	}
 
 // The following adds a NUL at the end.
 StringVal::StringVal(int length, const char* s)
-	: StringVal(new BroString(reinterpret_cast<const u_char*>(s), length, true))
+	: StringVal(new String(reinterpret_cast<const u_char*>(s), length, true))
 	{
 	}
 
-StringVal::StringVal(const char* s) : StringVal(new BroString(s))
+StringVal::StringVal(const char* s) : StringVal(new String(s))
 	{
 	}
 
@@ -980,9 +1020,9 @@ StringVal::StringVal(const string& s) : StringVal(s.length(), s.data())
 	{
 	}
 
-IntrusivePtr<Val> StringVal::SizeVal() const
+ValPtr StringVal::SizeVal() const
 	{
-	return val_mgr->Count(val.string_val->Len());
+	return zeek::val_mgr->Count(val.string_val->Len());
 	}
 
 int StringVal::Len()
@@ -1027,7 +1067,8 @@ unsigned int StringVal::MemoryAllocation() const
 	return padded_sizeof(*this) + val.string_val->MemoryAllocation();
 	}
 
-IntrusivePtr<StringVal> StringVal::Substitute(RE_Matcher* re, StringVal* repl, bool do_all)
+StringValPtr StringVal::Replace(
+	RE_Matcher* re, const String& repl, bool do_all)
 	{
 	const u_char* s = Bytes();
 	int offset = 0;
@@ -1075,7 +1116,7 @@ IntrusivePtr<StringVal> StringVal::Substitute(RE_Matcher* re, StringVal* repl, b
 
 	// size now reflects amount of space copied.  Factor in amount
 	// of space for replacement text.
-	size += cut_points.size() * repl->Len();
+	size += cut_points.size() * repl.Len();
 
 	// And a final NUL for good health.
 	++size;
@@ -1094,8 +1135,8 @@ IntrusivePtr<StringVal> StringVal::Substitute(RE_Matcher* re, StringVal* repl, b
 		start_offset = point.second;
 
 		// Now add in replacement text.
-		memcpy(r, repl->Bytes(), repl->Len());
-		r += repl->Len();
+		memcpy(r, repl.Bytes(), repl.Len());
+		r += repl.Len();
 		}
 
 	// Copy final trailing characters.
@@ -1108,21 +1149,21 @@ IntrusivePtr<StringVal> StringVal::Substitute(RE_Matcher* re, StringVal* repl, b
 	// the NUL.
 	r[0] = '\0';
 
-	return make_intrusive<StringVal>(new BroString(true, result, r - result));
+	return make_intrusive<zeek::StringVal>(new String(true, result, r - result));
 	}
 
-IntrusivePtr<Val> StringVal::DoClone(CloneState* state)
+ValPtr StringVal::DoClone(CloneState* state)
 	{
 	// We could likely treat this type as immutable and return a reference
 	// instead of creating a new copy, but we first need to be careful and
 	// audit whether anything internal actually does mutate it.
-	return state->NewClone(this, make_intrusive<StringVal>(
-	        new BroString((u_char*) val.string_val->Bytes(),
-	                      val.string_val->Len(), true)));
+	return state->NewClone(this, make_intrusive<zeek::StringVal>(
+	        new String((u_char*) val.string_val->Bytes(),
+	                   val.string_val->Len(), true)));
 	}
 
 PatternVal::PatternVal(RE_Matcher* re)
-	: Val(base_type_no_ref(TYPE_PATTERN))
+	: Val(base_type(TYPE_PATTERN))
 	{
 	val.re_val = re;
 	}
@@ -1130,12 +1171,11 @@ PatternVal::PatternVal(RE_Matcher* re)
 PatternVal::~PatternVal()
 	{
 	delete AsPattern();
-	Unref(type);	// base_type() ref'd it, so did our base constructor
 	}
 
 bool PatternVal::AddTo(Val* v, bool /* is_first_init */) const
 	{
-	if ( v->Type()->Tag() != TYPE_PATTERN )
+	if ( v->GetType()->Tag() != TYPE_PATTERN )
 		{
 		v->Error("not a pattern");
 		return false;
@@ -1170,7 +1210,7 @@ unsigned int PatternVal::MemoryAllocation() const
 	return padded_sizeof(*this) + val.re_val->MemoryAllocation();
 	}
 
-IntrusivePtr<Val> PatternVal::DoClone(CloneState* state)
+ValPtr PatternVal::DoClone(CloneState* state)
 	{
 	// We could likely treat this type as immutable and return a reference
 	// instead of creating a new copy, but we first need to be careful and
@@ -1178,25 +1218,22 @@ IntrusivePtr<Val> PatternVal::DoClone(CloneState* state)
 	auto re = new RE_Matcher(val.re_val->PatternText(),
 	                         val.re_val->AnywherePatternText());
 	re->Compile();
-	return state->NewClone(this, make_intrusive<PatternVal>(re));
+	return state->NewClone(this, make_intrusive<zeek::PatternVal>(re));
 	}
 
 ListVal::ListVal(TypeTag t)
-	: Val(new TypeList(t == TYPE_ANY ? nullptr : base_type(t)))
+	: Val(make_intrusive<TypeList>(t == TYPE_ANY ? nullptr : base_type(t)))
 	{
 	tag = t;
 	}
 
 ListVal::~ListVal()
 	{
-	for ( const auto& val : vals )
-		Unref(val);
-	Unref(type);
 	}
 
-IntrusivePtr<Val> ListVal::SizeVal() const
+ValPtr ListVal::SizeVal() const
 	{
-	return val_mgr->Count(vals.length());
+	return zeek::val_mgr->Count(vals.size());
 	}
 
 RE_Matcher* ListVal::BuildRE() const
@@ -1214,33 +1251,44 @@ RE_Matcher* ListVal::BuildRE() const
 	return re;
 	}
 
-void ListVal::Append(Val* v)
+void ListVal::Append(ValPtr v)
 	{
 	if ( type->AsTypeList()->IsPure() )
 		{
-		if ( v->Type()->Tag() != tag )
+		if ( v->GetType()->Tag() != tag )
 			Internal("heterogeneous list in ListVal::Append");
 		}
 
-	vals.push_back(v);
-	type->AsTypeList()->Append({NewRef{}, v->Type()});
+	const auto& vt = v->GetType();
+	vals.emplace_back(std::move(v));
+	type->AsTypeList()->Append(vt);
 	}
 
-TableVal* ListVal::ConvertToSet() const
+void ListVal::Append(Val* v)
+	{
+	Append({AdoptRef{}, v});
+	}
+
+TableValPtr ListVal::ToSetVal() const
 	{
 	if ( tag == TYPE_ANY )
 		Internal("conversion of heterogeneous list to set");
 
-	auto set_index = make_intrusive<TypeList>(
-	        IntrusivePtr{NewRef{}, type->AsTypeList()->PureType()});
+	const auto& pt = type->AsTypeList()->GetPureType();
+	auto set_index = make_intrusive<TypeList>(pt);
 	set_index->Append(base_type(tag));
 	auto s = make_intrusive<SetType>(std::move(set_index), nullptr);
-	TableVal* t = new TableVal(std::move(s));
+	auto t = make_intrusive<zeek::TableVal>(std::move(s));
 
 	for ( const auto& val : vals )
 		t->Assign(val, nullptr);
 
 	return t;
+	}
+
+TableVal* ListVal::ConvertToSet() const
+	{
+	return ToSetVal().release();
 	}
 
 void ListVal::Describe(ODesc* d) const
@@ -1249,13 +1297,13 @@ void ListVal::Describe(ODesc* d) const
 		{
 		type->Describe(d);
 		d->SP();
-		d->Add(vals.length());
+		d->Add(static_cast<uint64_t>(vals.size()));
 		d->SP();
 		}
 
-	loop_over_list(vals, i)
+	for ( auto i = 0u; i < vals.size(); ++i )
 		{
-		if ( i > 0 )
+		if ( i > 0u )
 			{
 			if ( d->IsReadable() || d->IsPortable() )
 				{
@@ -1268,14 +1316,14 @@ void ListVal::Describe(ODesc* d) const
 		}
 	}
 
-IntrusivePtr<Val> ListVal::DoClone(CloneState* state)
+ValPtr ListVal::DoClone(CloneState* state)
 	{
-	auto lv = make_intrusive<ListVal>(tag);
-	lv->vals.resize(vals.length());
+	auto lv = make_intrusive<zeek::ListVal>(tag);
+	lv->vals.reserve(vals.size());
 	state->NewClone(this, lv);
 
 	for ( const auto& val : vals )
-		lv->Append(val->Clone(state).release());
+		lv->Append(val->Clone(state));
 
 	return lv;
 	}
@@ -1286,14 +1334,13 @@ unsigned int ListVal::MemoryAllocation() const
 	for ( const auto& val : vals )
 		size += val->MemoryAllocation();
 
-	return size + padded_sizeof(*this) + vals.MemoryAllocation() - padded_sizeof(vals)
-		+ type->MemoryAllocation();
+	size += pad_size(vals.capacity() * sizeof(decltype(vals)::value_type));
+	return size + padded_sizeof(*this) + type->MemoryAllocation();
 	}
 
 TableEntryVal* TableEntryVal::Clone(Val::CloneState* state)
 	{
 	auto rval = new TableEntryVal(val ? val->Clone(state) : nullptr);
-	rval->last_access_time = last_access_time;
 	rval->expire_access_time = expire_access_time;
 	return rval;
 	}
@@ -1323,7 +1370,7 @@ static void table_entry_val_delete_func(void* val)
 	delete tv;
 	}
 
-static void find_nested_record_types(BroType* t, std::set<RecordType*>* found)
+static void find_nested_record_types(const TypePtr& t, std::set<RecordType*>* found)
 	{
 	if ( ! t )
 		return;
@@ -1335,35 +1382,35 @@ static void find_nested_record_types(BroType* t, std::set<RecordType*>* found)
 		found->emplace(rt);
 
 		for ( auto i = 0; i < rt->NumFields(); ++i )
-			find_nested_record_types(rt->FieldDecl(i)->type.get(), found);
+			find_nested_record_types(rt->FieldDecl(i)->type, found);
 		}
 		return;
 	case TYPE_TABLE:
-		find_nested_record_types(t->AsTableType()->Indices(), found);
-		find_nested_record_types(t->AsTableType()->YieldType(), found);
+		find_nested_record_types(t->AsTableType()->GetIndices(), found);
+		find_nested_record_types(t->AsTableType()->Yield(), found);
 		return;
 	case TYPE_LIST:
 		{
-		for ( auto& type : *t->AsTypeList()->Types() )
+		for ( const auto& type : t->AsTypeList()->GetTypes() )
 			find_nested_record_types(type, found);
 		}
 		return;
 	case TYPE_FUNC:
-		find_nested_record_types(t->AsFuncType()->Args(), found);
-		find_nested_record_types(t->AsFuncType()->YieldType(), found);
+		find_nested_record_types(t->AsFuncType()->Params(), found);
+		find_nested_record_types(t->AsFuncType()->Yield(), found);
 		return;
 	case TYPE_VECTOR:
-		find_nested_record_types(t->AsVectorType()->YieldType(), found);
+		find_nested_record_types(t->AsVectorType()->Yield(), found);
 		return;
 	case TYPE_TYPE:
-		find_nested_record_types(t->AsTypeType()->Type(), found);
+		find_nested_record_types(t->AsTypeType()->GetType(), found);
 		return;
 	default:
 		return;
 	}
 	}
 
-TableVal::TableVal(IntrusivePtr<TableType> t, IntrusivePtr<Attributes> a) : Val(t.get())
+TableVal::TableVal(TableTypePtr t, detail::AttributesPtr a) : Val(t)
 	{
 	Init(std::move(t));
 	SetAttrs(std::move(a));
@@ -1371,7 +1418,7 @@ TableVal::TableVal(IntrusivePtr<TableType> t, IntrusivePtr<Attributes> a) : Val(
 	if ( ! is_parsing )
 		return;
 
-	for ( const auto& t : *table_type->IndexTypes() )
+	for ( const auto& t : table_type->GetIndexTypes() )
 		{
 		std::set<RecordType*> found;
 		// TODO: this likely doesn't have to be repeated for each new TableVal,
@@ -1383,7 +1430,7 @@ TableVal::TableVal(IntrusivePtr<TableType> t, IntrusivePtr<Attributes> a) : Val(
 		}
 	}
 
-void TableVal::Init(IntrusivePtr<TableType> t)
+void TableVal::Init(TableTypePtr t)
 	{
 	table_type = std::move(t);
 	expire_func = nullptr;
@@ -1397,9 +1444,8 @@ void TableVal::Init(IntrusivePtr<TableType> t)
 	else
 		subnets = nullptr;
 
-	table_hash = new CompositeHash(IntrusivePtr<TypeList>(NewRef{},
-	                               table_type->Indices()));
-	val.table_val = new PDict<TableEntryVal>;
+	table_hash = new CompositeHash(table_type->GetIndices());
+	val.table_val = new PDict<zeek::TableEntryVal>;
 	val.table_val->SetDeleteFunc(table_entry_val_delete_func);
 	}
 
@@ -1417,7 +1463,7 @@ void TableVal::RemoveAll()
 	{
 	// Here we take the brute force approach.
 	delete AsTable();
-	val.table_val = new PDict<TableEntryVal>;
+	val.table_val = new PDict<zeek::TableEntryVal>;
 	val.table_val->SetDeleteFunc(table_entry_val_delete_func);
 	}
 
@@ -1430,55 +1476,64 @@ int TableVal::RecursiveSize() const
 	{
 	int n = AsTable()->Length();
 
-	if ( Type()->IsSet() ||
-	     const_cast<TableType*>(Type()->AsTableType())->YieldType()->Tag()
-			!= TYPE_TABLE )
+	if ( GetType()->IsSet() ||
+	     GetType()->AsTableType()->Yield()->Tag() != TYPE_TABLE )
 		return n;
 
-	PDict<TableEntryVal>* v = val.table_val;
+	PDict<zeek::TableEntryVal>* v = val.table_val;
 	IterCookie* c = v->InitForIteration();
 
 	TableEntryVal* tv;
 	while ( (tv = v->NextEntry(c)) )
 		{
-		if ( tv->Value() )
-			n += tv->Value()->AsTableVal()->RecursiveSize();
+		if ( tv->GetVal() )
+			n += tv->GetVal()->AsTableVal()->RecursiveSize();
 		}
 
 	return n;
 	}
 
-void TableVal::SetAttrs(IntrusivePtr<Attributes> a)
+void TableVal::SetAttrs(detail::AttributesPtr a)
 	{
 	attrs = std::move(a);
 
 	if ( ! attrs )
 		return;
 
-	CheckExpireAttr(ATTR_EXPIRE_READ);
-	CheckExpireAttr(ATTR_EXPIRE_WRITE);
-	CheckExpireAttr(ATTR_EXPIRE_CREATE);
+	CheckExpireAttr(detail::ATTR_EXPIRE_READ);
+	CheckExpireAttr(detail::ATTR_EXPIRE_WRITE);
+	CheckExpireAttr(detail::ATTR_EXPIRE_CREATE);
 
-	Attr* ef = attrs->FindAttr(ATTR_EXPIRE_FUNC);
+	const auto& ef = attrs->Find(detail::ATTR_EXPIRE_FUNC);
 
 	if ( ef )
-		expire_func = {NewRef{}, ef->AttrExpr()};
+		expire_func = ef->GetExpr();
 
-	auto cf = attrs->FindAttr(ATTR_ON_CHANGE);
+	const auto& cf = attrs->Find(detail::ATTR_ON_CHANGE);
 
 	if ( cf )
-		change_func = {NewRef{}, cf->AttrExpr()};
+		change_func = cf->GetExpr();
+
+	auto bs = attrs->Find(zeek::detail::ATTR_BROKER_STORE);
+	if ( bs && broker_store.empty() )
+		{
+		auto c = bs->GetExpr()->Eval(nullptr);
+		assert(c);
+		assert(c->GetType()->Tag() == zeek::TYPE_STRING);
+		broker_store = c->AsStringVal()->AsString()->CheckString();
+		broker_mgr->AddForwardedStore(broker_store, {NewRef{}, this});
+		}
 	}
 
-void TableVal::CheckExpireAttr(attr_tag at)
+void TableVal::CheckExpireAttr(detail::AttrTag at)
 	{
-	Attr* a = attrs->FindAttr(at);
+	const auto& a = attrs->Find(at);
 
 	if ( a )
 		{
-		expire_time = {NewRef{}, a->AttrExpr()};
+		expire_time = a->GetExpr();
 
-		if ( expire_time->Type()->Tag() != TYPE_INTERVAL )
+		if ( expire_time->GetType()->Tag() != TYPE_INTERVAL )
 			{
 			if ( ! expire_time->IsError() )
 				expire_time->SetError("expiration interval has wrong type");
@@ -1496,63 +1551,71 @@ void TableVal::CheckExpireAttr(attr_tag at)
 		}
 	}
 
-bool TableVal::Assign(Val* index, IntrusivePtr<Val> new_val)
+bool TableVal::Assign(ValPtr index, ValPtr new_val, bool broker_forward)
 	{
-	HashKey* k = ComputeHash(index);
+	auto k = MakeHashKey(*index);
+
 	if ( ! k )
 		{
-		index->Error("index type doesn't match table", table_type->Indices());
+		index->Error("index type doesn't match table", table_type->GetIndices().get());
 		return false;
 		}
 
-	return Assign(index, k, std::move(new_val));
+	return Assign(std::move(index), std::move(k), std::move(new_val), broker_forward);
 	}
 
 bool TableVal::Assign(Val* index, Val* new_val)
 	{
-	return Assign(index, {AdoptRef{}, new_val});
+	return Assign({NewRef{}, index}, {AdoptRef{}, new_val});
 	}
 
-bool TableVal::Assign(Val* index, HashKey* k, IntrusivePtr<Val> new_val)
+bool TableVal::Assign(ValPtr index, std::unique_ptr<HashKey> k,
+                      ValPtr new_val, bool broker_forward)
 	{
 	bool is_set = table_type->IsSet();
 
 	if ( (is_set && new_val) || (! is_set && ! new_val) )
 		InternalWarning("bad set/table in TableVal::Assign");
 
-	TableEntryVal* new_entry_val = new TableEntryVal(new_val);
+	TableEntryVal* new_entry_val = new TableEntryVal(std::move(new_val));
 	HashKey k_copy(k->Key(), k->Size(), k->Hash());
-	TableEntryVal* old_entry_val = AsNonConstTable()->Insert(k, new_entry_val);
+	TableEntryVal* old_entry_val = AsNonConstTable()->Insert(k.get(), new_entry_val);
 
 	// If the dictionary index already existed, the insert may free up the
 	// memory allocated to the key bytes, so have to assume k is invalid
 	// from here on out.
-	delete k;
 	k = nullptr;
 
 	if ( subnets )
 		{
 		if ( ! index )
 			{
-			auto v = RecoverIndex(&k_copy);
+			auto v = RecreateIndex(k_copy);
 			subnets->Insert(v.get(), new_entry_val);
 			}
 		else
-			subnets->Insert(index, new_entry_val);
+			subnets->Insert(index.get(), new_entry_val);
 		}
 
 	// Keep old expiration time if necessary.
-	if ( old_entry_val && attrs && attrs->FindAttr(ATTR_EXPIRE_CREATE) )
+	if ( old_entry_val && attrs && attrs->Find(detail::ATTR_EXPIRE_CREATE) )
 		new_entry_val->SetExpireAccess(old_entry_val->ExpireAccessTime());
 
 	Modified();
 
-	if ( change_func )
+	if ( change_func || ( broker_forward && ! broker_store.empty() ) )
 		{
-		auto change_index = index ? IntrusivePtr<Val>{NewRef{}, index}
-		                          : RecoverIndex(&k_copy);
-		Val* v = old_entry_val ? old_entry_val->Value() : new_val.get();
-		CallChangeFunc(change_index.get(), v, old_entry_val ? ELEMENT_CHANGED : ELEMENT_NEW);
+		auto change_index = index ? std::move(index)
+		                          : RecreateIndex(k_copy);
+
+		if ( broker_forward && ! broker_store.empty() )
+			SendToStore(change_index.get(), new_entry_val, old_entry_val ? ELEMENT_CHANGED : ELEMENT_NEW);
+
+		if ( change_func )
+			{
+			const auto& v = old_entry_val ? old_entry_val->GetVal() : new_entry_val->GetVal();
+			CallChangeFunc(change_index, v, old_entry_val ? ELEMENT_CHANGED : ELEMENT_NEW);
+			}
 		}
 
 	delete old_entry_val;
@@ -1562,12 +1625,12 @@ bool TableVal::Assign(Val* index, HashKey* k, IntrusivePtr<Val> new_val)
 
 bool TableVal::Assign(Val* index, HashKey* k, Val* new_val)
 	{
-	return Assign(index, k, {AdoptRef{}, new_val});
+	return Assign({NewRef{}, index}, std::unique_ptr<HashKey>{k}, {AdoptRef{}, new_val});
 	}
 
-IntrusivePtr<Val> TableVal::SizeVal() const
+ValPtr TableVal::SizeVal() const
 	{
-	return val_mgr->Count(Size());
+	return zeek::val_mgr->Count(Size());
 	}
 
 bool TableVal::AddTo(Val* val, bool is_first_init) const
@@ -1577,7 +1640,7 @@ bool TableVal::AddTo(Val* val, bool is_first_init) const
 
 bool TableVal::AddTo(Val* val, bool is_first_init, bool propagate_ops) const
 	{
-	if ( val->Type()->Tag() != TYPE_TABLE )
+	if ( val->GetType()->Tag() != TYPE_TABLE )
 		{
 		val->Error("not a table");
 		return false;
@@ -1585,22 +1648,24 @@ bool TableVal::AddTo(Val* val, bool is_first_init, bool propagate_ops) const
 
 	TableVal* t = val->AsTableVal();
 
-	if ( ! same_type(type, t->Type()) )
+	if ( ! same_type(type, t->GetType()) )
 		{
-		type->Error("table type clash", t->Type());
+		type->Error("table type clash", t->GetType().get());
 		return false;
 		}
 
-	const PDict<TableEntryVal>* tbl = AsTable();
+	const PDict<zeek::TableEntryVal>* tbl = AsTable();
 	IterCookie* c = tbl->InitForIteration();
 
 	HashKey* k;
 	TableEntryVal* v;
 	while ( (v = tbl->NextEntry(k, c)) )
 		{
+		std::unique_ptr<HashKey> hk{k};
+
 		if ( is_first_init && t->AsTable()->Lookup(k) )
 			{
-			auto key = table_hash->RecoverVals(k);
+			auto key = table_hash->RecoverVals(*k);
 			// ### Shouldn't complain if their values are equal.
 			key->Warn("multiple initializations for index");
 			continue;
@@ -1608,12 +1673,12 @@ bool TableVal::AddTo(Val* val, bool is_first_init, bool propagate_ops) const
 
 		if ( type->IsSet() )
 			{
-			if ( ! t->Assign(v->Value(), k, nullptr) )
+			if ( ! t->Assign(v->GetVal(), std::move(hk), nullptr) )
 				 return false;
 			}
 		else
 			{
-			if ( ! t->Assign(nullptr, k, {NewRef{}, v->Value()}) )
+			if ( ! t->Assign(nullptr, std::move(hk), v->GetVal()) )
 				 return false;
 			}
 		}
@@ -1623,7 +1688,7 @@ bool TableVal::AddTo(Val* val, bool is_first_init, bool propagate_ops) const
 
 bool TableVal::RemoveFrom(Val* val) const
 	{
-	if ( val->Type()->Tag() != TYPE_TABLE )
+	if ( val->GetType()->Tag() != TYPE_TABLE )
 		{
 		val->Error("not a table");
 		return false;
@@ -1631,13 +1696,13 @@ bool TableVal::RemoveFrom(Val* val) const
 
 	TableVal* t = val->AsTableVal();
 
-	if ( ! same_type(type, t->Type()) )
+	if ( ! same_type(type, t->GetType()) )
 		{
-		type->Error("table type clash", t->Type());
+		type->Error("table type clash", t->GetType().get());
 		return false;
 		}
 
-	const PDict<TableEntryVal>* tbl = AsTable();
+	const PDict<zeek::TableEntryVal>* tbl = AsTable();
 	IterCookie* c = tbl->InitForIteration();
 
 	HashKey* k;
@@ -1648,25 +1713,25 @@ bool TableVal::RemoveFrom(Val* val) const
 		// OTOH, they are both the same type, so as long as
 		// we don't have hash keys that are keyed per dictionary,
 		// it should work ...
-		t->Delete(k);
+		t->Remove(*k);
 		delete k;
 		}
 
 	return true;
 	}
 
-TableVal* TableVal::Intersect(const TableVal* tv) const
+TableValPtr TableVal::Intersection(const TableVal& tv) const
 	{
-	TableVal* result = new TableVal(table_type);
+	auto result = make_intrusive<zeek::TableVal>(table_type);
 
-	const PDict<TableEntryVal>* t0 = AsTable();
-	const PDict<TableEntryVal>* t1 = tv->AsTable();
-	PDict<TableEntryVal>* t2 = result->AsNonConstTable();
+	const PDict<zeek::TableEntryVal>* t0 = AsTable();
+	const PDict<zeek::TableEntryVal>* t1 = tv.AsTable();
+	PDict<zeek::TableEntryVal>* t2 = result->AsNonConstTable();
 
 	// Figure out which is smaller; assign it to t1.
 	if ( t1->Length() > t0->Length() )
 		{ // Swap.
-		const PDict<TableEntryVal>* tmp = t1;
+		const PDict<zeek::TableEntryVal>* tmp = t1;
 		t1 = t0;
 		t0 = tmp;
 		}
@@ -1686,10 +1751,10 @@ TableVal* TableVal::Intersect(const TableVal* tv) const
 	return result;
 	}
 
-bool TableVal::EqualTo(const TableVal* tv) const
+bool TableVal::EqualTo(const TableVal& tv) const
 	{
-	const PDict<TableEntryVal>* t0 = AsTable();
-	const PDict<TableEntryVal>* t1 = tv->AsTable();
+	const PDict<zeek::TableEntryVal>* t0 = AsTable();
+	const PDict<zeek::TableEntryVal>* t1 = tv.AsTable();
 
 	if ( t0->Length() != t1->Length() )
 		return false;
@@ -1713,10 +1778,10 @@ bool TableVal::EqualTo(const TableVal* tv) const
 	return true;
 	}
 
-bool TableVal::IsSubsetOf(const TableVal* tv) const
+bool TableVal::IsSubsetOf(const TableVal& tv) const
 	{
-	const PDict<TableEntryVal>* t0 = AsTable();
-	const PDict<TableEntryVal>* t1 = tv->AsTable();
+	const PDict<zeek::TableEntryVal>* t0 = AsTable();
+	const PDict<zeek::TableEntryVal>* t1 = tv.AsTable();
 
 	if ( t0->Length() > t1->Length() )
 		return false;
@@ -1740,28 +1805,28 @@ bool TableVal::IsSubsetOf(const TableVal* tv) const
 	return true;
 	}
 
-bool TableVal::ExpandAndInit(IntrusivePtr<Val> index, IntrusivePtr<Val> new_val)
+bool TableVal::ExpandAndInit(ValPtr index, ValPtr new_val)
 	{
-	BroType* index_type = index->Type();
+	const auto& index_type = index->GetType();
 
 	if ( index_type->IsSet() )
 		{
-		index = {AdoptRef{}, index->AsTableVal()->ConvertToList()};
+		index = index->AsTableVal()->ToListVal();
 		return ExpandAndInit(std::move(index), std::move(new_val));
 		}
 
 	if ( index_type->Tag() != TYPE_LIST )
 		// Nothing to expand.
-		return CheckAndAssign(index.get(), std::move(new_val));
+		return CheckAndAssign(std::move(index), std::move(new_val));
 
 	ListVal* iv = index->AsListVal();
 	if ( iv->BaseTag() != TYPE_ANY )
 		{
-		if ( table_type->Indices()->Types()->length() != 1 )
+		if ( table_type->GetIndices()->GetTypes().size() != 1 )
 			reporter->InternalError("bad singleton list index");
 
 		for ( int i = 0; i < iv->Length(); ++i )
-			if ( ! ExpandAndInit({NewRef{}, iv->Index(i)}, new_val) )
+			if ( ! ExpandAndInit(iv->Idx(i), new_val) )
 				return false;
 
 		return true;
@@ -1769,51 +1834,55 @@ bool TableVal::ExpandAndInit(IntrusivePtr<Val> index, IntrusivePtr<Val> new_val)
 
 	else
 		{ // Compound table.
-		val_list* vl = iv->Vals();
-		loop_over_list(*vl, i)
+		int i;
+
+		for ( i = 0; i < iv->Length(); ++i )
 			{
+			const auto& v = iv->Idx(i);
 			// ### if CompositeHash::ComputeHash did flattening
 			// of 1-element lists (like ComputeSingletonHash does),
 			// then we could optimize here.
-			BroType* t = (*vl)[i]->Type();
+			const auto& t = v->GetType();
+
 			if ( t->IsSet() || t->Tag() == TYPE_LIST )
 				break;
 			}
 
-		if ( i >= vl->length() )
+		if ( i >= iv->Length() )
 			// Nothing to expand.
-			return CheckAndAssign(index.get(), std::move(new_val));
+			return CheckAndAssign(std::move(index), std::move(new_val));
 		else
-			return ExpandCompoundAndInit(vl, i, std::move(new_val));
+			return ExpandCompoundAndInit(iv, i, std::move(new_val));
 		}
 	}
 
 
-IntrusivePtr<Val> TableVal::Default(Val* index)
+ValPtr TableVal::Default(const ValPtr& index)
 	{
-	Attr* def_attr = FindAttr(ATTR_DEFAULT);
+	const auto& def_attr = GetAttr(detail::ATTR_DEFAULT);
 
 	if ( ! def_attr )
 		return nullptr;
 
 	if ( ! def_val )
 		{
-		BroType* ytype = Type()->YieldType();
-		BroType* dtype = def_attr->AttrExpr()->Type();
+		const auto& ytype = GetType()->Yield();
+		const auto& dtype = def_attr->GetExpr()->GetType();
 
 		if ( dtype->Tag() == TYPE_RECORD && ytype->Tag() == TYPE_RECORD &&
 		     ! same_type(dtype, ytype) &&
 		     record_promotion_compatible(dtype->AsRecordType(),
 						 ytype->AsRecordType()) )
 			{
-			auto coerce = make_intrusive<RecordCoerceExpr>(
-			        IntrusivePtr{NewRef{}, def_attr->AttrExpr()},
-			        IntrusivePtr{NewRef{}, ytype->AsRecordType()});
+			auto rt = cast_intrusive<RecordType>(ytype);
+			auto coerce = make_intrusive<detail::RecordCoerceExpr>(
+				def_attr->GetExpr(), std::move(rt));
+
 			def_val = coerce->Eval(nullptr);
 			}
 
 		else
-			def_val = def_attr->AttrExpr()->Eval(nullptr);
+			def_val = def_attr->GetExpr()->Eval(nullptr);
 		}
 
 	if ( ! def_val )
@@ -1822,10 +1891,10 @@ IntrusivePtr<Val> TableVal::Default(Val* index)
 		return nullptr;
 		}
 
-	if ( def_val->Type()->Tag() != TYPE_FUNC ||
-	     same_type(def_val->Type(), Type()->YieldType()) )
+	if ( def_val->GetType()->Tag() != TYPE_FUNC ||
+	     same_type(def_val->GetType(), GetType()->Yield()) )
 		{
-		if ( def_attr->AttrExpr()->IsConst() )
+		if ( def_attr->GetExpr()->IsConst() )
 			return def_val;
 
 		try
@@ -1839,25 +1908,25 @@ IntrusivePtr<Val> TableVal::Default(Val* index)
 		return nullptr;
 		}
 
-	const Func* f = def_val->AsFunc();
-	zeek::Args vl;
+	const zeek::Func* f = def_val->AsFunc();
+	Args vl;
 
-	if ( index->Type()->Tag() == TYPE_LIST )
+	if ( index->GetType()->Tag() == TYPE_LIST )
 		{
-		const val_list* vl0 = index->AsListVal()->Vals();
-		vl.reserve(vl0->length());
+		auto lv = index->AsListVal();
+		vl.reserve(lv->Length());
 
-		for ( const auto& v : *vl0 )
-			vl.emplace_back(NewRef{}, v);
+		for ( const auto& v : lv->Vals() )
+			vl.emplace_back(v);
 		}
 	else
-		vl.emplace_back(NewRef{}, index);
+		vl.emplace_back(index);
 
-	IntrusivePtr<Val> result;
+	ValPtr result;
 
 	try
 		{
-		result = f->Call(vl);
+		result = f->Invoke(&vl);
 		}
 
 	catch ( InterpreterException& e )
@@ -1872,90 +1941,112 @@ IntrusivePtr<Val> TableVal::Default(Val* index)
 	return result;
 	}
 
-IntrusivePtr<Val> TableVal::Lookup(Val* index, bool use_default_val)
+const ValPtr& TableVal::Find(const ValPtr& index)
 	{
 	if ( subnets )
 		{
-		TableEntryVal* v = (TableEntryVal*) subnets->Lookup(index);
+		TableEntryVal* v = (TableEntryVal*) subnets->Lookup(index.get());
 		if ( v )
 			{
-			if ( attrs && attrs->FindAttr(ATTR_EXPIRE_READ) )
-					v->SetExpireAccess(network_time);
+			if ( attrs && attrs->Find(detail::ATTR_EXPIRE_READ) )
+				v->SetExpireAccess(network_time);
 
-			return {NewRef{}, v->Value() ? v->Value() : this};
+			if ( v->GetVal() )
+				return v->GetVal();
+
+			return zeek::val_mgr->True();
 			}
 
-		if ( ! use_default_val )
-			return nullptr;
-
-		return Default(index);
+		return Val::nil;
 		}
 
-	const PDict<TableEntryVal>* tbl = AsTable();
+	const PDict<zeek::TableEntryVal>* tbl = AsTable();
 
 	if ( tbl->Length() > 0 )
 		{
-		HashKey* k = ComputeHash(index);
+		auto k = MakeHashKey(*index);
+
 		if ( k )
 			{
-			TableEntryVal* v = AsTable()->Lookup(k);
-			delete k;
+			TableEntryVal* v = AsTable()->Lookup(k.get());
 
 			if ( v )
 				{
-				if ( attrs && attrs->FindAttr(ATTR_EXPIRE_READ) )
+				if ( attrs && attrs->Find(detail::ATTR_EXPIRE_READ) )
 					v->SetExpireAccess(network_time);
 
-				return {NewRef{}, v->Value() ? v->Value() : this};
+				if ( v->GetVal() )
+					return v->GetVal();
+
+				return zeek::val_mgr->True();
 				}
 			}
 		}
 
-	if ( ! use_default_val )
-		return nullptr;
+	return Val::nil;
+	}
+
+ValPtr TableVal::FindOrDefault(const ValPtr& index)
+	{
+	if ( auto rval = Find(index) )
+		return rval;
 
 	return Default(index);
 	}
 
-IntrusivePtr<VectorVal> TableVal::LookupSubnets(const SubNetVal* search)
+Val* TableVal::Lookup(Val* index, bool use_default_val)
+	{
+	static ValPtr last_default;
+	last_default = nullptr;
+	ValPtr idx{NewRef{}, index};
+
+	if ( const auto& rval = Find(idx) )
+		return rval.get();
+
+	if ( ! use_default_val )
+		return nullptr;
+
+	last_default = Default(idx);
+	return last_default.get();
+	}
+
+VectorValPtr TableVal::LookupSubnets(const SubNetVal* search)
 	{
 	if ( ! subnets )
 		reporter->InternalError("LookupSubnets called on wrong table type");
 
-	auto result = make_intrusive<VectorVal>(internal_type("subnet_vec")->AsVectorType());
+	auto result = make_intrusive<zeek::VectorVal>(id::find_type<VectorType>("subnet_vec"));
 
 	auto matches = subnets->FindAll(search);
 	for ( auto element : matches )
-		result->Assign(result->Size(), make_intrusive<SubNetVal>(get<0>(element)));
+		result->Assign(result->Size(), make_intrusive<zeek::SubNetVal>(get<0>(element)));
 
 	return result;
 	}
 
-IntrusivePtr<TableVal> TableVal::LookupSubnetValues(const SubNetVal* search)
+TableValPtr TableVal::LookupSubnetValues(const SubNetVal* search)
 	{
 	if ( ! subnets )
 		reporter->InternalError("LookupSubnetValues called on wrong table type");
 
-	auto nt = make_intrusive<TableVal>(IntrusivePtr{NewRef{}, this->Type()->AsTableType()});
+	auto nt = make_intrusive<zeek::TableVal>(this->GetType<TableType>());
 
 	auto matches = subnets->FindAll(search);
 	for ( auto element : matches )
 		{
-		SubNetVal* s = new SubNetVal(get<0>(element));
+		auto s = make_intrusive<zeek::SubNetVal>(get<0>(element));
 		TableEntryVal* entry = reinterpret_cast<TableEntryVal*>(get<1>(element));
 
-		if ( entry && entry->Value() )
-			nt->Assign(s, {NewRef{}, entry->Value()});
+		if ( entry && entry->GetVal() )
+			nt->Assign(std::move(s), entry->GetVal());
 		else
-			nt->Assign(s, nullptr); // set
+			nt->Assign(std::move(s), nullptr); // set
 
 		if ( entry )
 			{
-			if ( attrs && attrs->FindAttr(ATTR_EXPIRE_READ) )
+			if ( attrs && attrs->Find(detail::ATTR_EXPIRE_READ) )
 				entry->SetExpireAccess(network_time);
 			}
-
-		Unref(s); // assign does not consume index
 		}
 
 	return nt;
@@ -1969,13 +2060,12 @@ bool TableVal::UpdateTimestamp(Val* index)
 		v = (TableEntryVal*) subnets->Lookup(index);
 	else
 		{
-		HashKey* k = ComputeHash(index);
+		auto k = MakeHashKey(*index);
+
 		if ( ! k )
 			return false;
 
-		v = AsTable()->Lookup(k);
-
-		delete k;
+		v = AsTable()->Lookup(k.get());
 		}
 
 	if ( ! v )
@@ -1986,12 +2076,14 @@ bool TableVal::UpdateTimestamp(Val* index)
 	return true;
 	}
 
-IntrusivePtr<ListVal> TableVal::RecoverIndex(const HashKey* k) const
+ListValPtr TableVal::RecreateIndex(const HashKey& k) const
 	{
 	return table_hash->RecoverVals(k);
 	}
 
-void TableVal::CallChangeFunc(const Val* index, Val* old_value, OnChangeType tpe)
+void TableVal::CallChangeFunc(const ValPtr& index,
+                              const ValPtr& old_value,
+                              OnChangeType tpe)
 	{
 	if ( ! change_func || ! index || in_change_func )
 		return;
@@ -2004,46 +2096,54 @@ void TableVal::CallChangeFunc(const Val* index, Val* old_value, OnChangeType tpe
 		auto thefunc = change_func->Eval(nullptr);
 
 		if ( ! thefunc )
-			{
 			return;
-			}
 
-		if ( thefunc->Type()->Tag() != TYPE_FUNC )
+		if ( thefunc->GetType()->Tag() != TYPE_FUNC )
 			{
 			thefunc->Error("not a function");
 			return;
 			}
 
-		const Func* f = thefunc->AsFunc();
-		const auto& index_list = *index->AsListVal()->Vals();
-
+		const zeek::Func* f = thefunc->AsFunc();
 		zeek::Args vl;
-		vl.reserve(2 + index_list.length() + table_type->IsTable());
+
+		// we either get passed the raw index_val - or a ListVal with exactly one element.
+		if ( index->GetType()->Tag() == zeek::TYPE_LIST )
+			vl.reserve(2 + index->AsListVal()->Length() + table_type->IsTable());
+		else
+			vl.reserve(3 + table_type->IsTable());
+
 		vl.emplace_back(NewRef{}, this);
 
 		switch ( tpe )
 			{
 			case ELEMENT_NEW:
-				vl.emplace_back(BifType::Enum::TableChange->GetVal(BifEnum::TableChange::TABLE_ELEMENT_NEW));
+				vl.emplace_back(BifType::Enum::TableChange->GetEnumVal(BifEnum::TableChange::TABLE_ELEMENT_NEW));
 				break;
 			case ELEMENT_CHANGED:
-				vl.emplace_back(BifType::Enum::TableChange->GetVal(BifEnum::TableChange::TABLE_ELEMENT_CHANGED));
+				vl.emplace_back(BifType::Enum::TableChange->GetEnumVal(BifEnum::TableChange::TABLE_ELEMENT_CHANGED));
 				break;
 			case ELEMENT_REMOVED:
-				vl.emplace_back(BifType::Enum::TableChange->GetVal(BifEnum::TableChange::TABLE_ELEMENT_REMOVED));
+				vl.emplace_back(BifType::Enum::TableChange->GetEnumVal(BifEnum::TableChange::TABLE_ELEMENT_REMOVED));
 				break;
 			case ELEMENT_EXPIRED:
-				vl.emplace_back(BifType::Enum::TableChange->GetVal(BifEnum::TableChange::TABLE_ELEMENT_EXPIRED));
+				vl.emplace_back(BifType::Enum::TableChange->GetEnumVal(BifEnum::TableChange::TABLE_ELEMENT_EXPIRED));
 			}
 
-		for ( const auto& v : *index->AsListVal()->Vals() )
-			vl.emplace_back(NewRef{}, v);
+
+		if ( index->GetType()->Tag() == zeek::TYPE_LIST )
+			{
+			for ( const auto& v : index->AsListVal()->Vals() )
+				vl.emplace_back(v);
+			}
+		else
+			vl.emplace_back(index);
 
 		if ( table_type->IsTable() )
-			vl.emplace_back(NewRef{}, old_value);
+			vl.emplace_back(old_value);
 
 		in_change_func = true;
-		f->Call(vl);
+		f->Invoke(&vl);
 		}
 	catch ( InterpreterException& e )
 		{
@@ -2052,30 +2152,148 @@ void TableVal::CallChangeFunc(const Val* index, Val* old_value, OnChangeType tpe
 	in_change_func = false;
 	}
 
-IntrusivePtr<Val> TableVal::Delete(const Val* index)
+void TableVal::SendToStore(const Val* index, const TableEntryVal* new_entry_val, OnChangeType tpe)
 	{
-	HashKey* k = ComputeHash(index);
-	TableEntryVal* v = k ? AsNonConstTable()->RemoveEntry(k) : nullptr;
-	IntrusivePtr<Val> va{NewRef{}, v ? (v->Value() ? v->Value() : this) : nullptr};
+	if ( broker_store.empty() || ! index )
+		return;
 
-	if ( subnets && ! subnets->Remove(index) )
+	try
+		{
+		auto handle = broker_mgr->LookupStore(broker_store);
+
+		if ( ! handle )
+			return;
+
+		// we either get passed the raw index_val - or a ListVal with exactly one element.
+		// Since Broker does not support ListVals, we have to unoll this in the second case.
+		const Val* index_val;
+		if ( index->GetType()->Tag() == zeek::TYPE_LIST )
+			{
+			if ( index->AsListVal()->Length() != 1 )
+				{
+				zeek::emit_builtin_error("table with complex index not supported for &broker_store");
+				return;
+				}
+
+			index_val = index->AsListVal()->Idx(0).get();
+			}
+		else
+			{
+			index_val = index;
+			}
+
+		auto broker_index = bro_broker::val_to_data(index_val);
+
+		if ( ! broker_index )
+			{
+			zeek::emit_builtin_error("invalid Broker data conversation for table index");
+			return;
+			}
+
+		switch ( tpe )
+			{
+			case ELEMENT_NEW:
+			case ELEMENT_CHANGED:
+				{
+				broker::optional<broker::timespan> expiry;
+
+				auto expire_time = GetExpireTime();
+				if ( expire_time == 0 )
+					// Entry is set to immediately expire. Let's not forward it.
+					break;
+
+				if ( expire_time > 0 )
+					{
+					if ( attrs->Find(zeek::detail::ATTR_EXPIRE_CREATE) )
+						{
+						// for create expiry, we have to substract the already elapsed time from the expiry.
+						auto e = expire_time - (network_time - new_entry_val->ExpireAccessTime());
+						if ( e <= 0 )
+							// element already expired? Let's not insert it.
+							break;
+
+						expiry = bro_broker::convert_expiry(e);
+						}
+					else
+						expiry = bro_broker::convert_expiry(expire_time);
+					}
+
+				if ( table_type->IsSet() )
+					handle->store.put(std::move(*broker_index), broker::data(), expiry);
+				else
+					{
+					if ( ! new_entry_val )
+						{
+						zeek::emit_builtin_error("did not receive new value for Broker datastore send operation");
+						return;
+						}
+
+					auto new_value = new_entry_val->GetVal().get();
+					auto broker_val = bro_broker::val_to_data(new_value);
+					if ( ! broker_val )
+						{
+						zeek::emit_builtin_error("invalid Broker data conversation for table value");
+						return;
+						}
+
+					handle->store.put(std::move(*broker_index), std::move(*broker_val), expiry);
+					}
+				break;
+				}
+
+			case ELEMENT_REMOVED:
+				handle->store.erase(std::move(*broker_index));
+				break;
+
+			case ELEMENT_EXPIRED:
+				// we do nothing here. The Broker store does its own expiration - so the element
+				// should expire at about the same time.
+				break;
+			}
+		}
+	catch ( InterpreterException& e )
+		{
+		zeek::emit_builtin_error("The previous error was encountered while trying to resolve the &broker_store attribute of the set/table. Potentially the Broker::Store has not been initialized before being used.");
+		}
+	}
+
+ValPtr TableVal::Remove(const Val& index, bool broker_forward)
+	{
+	auto k = MakeHashKey(index);
+
+	TableEntryVal* v = k ? AsNonConstTable()->RemoveEntry(k.get()) : nullptr;
+	ValPtr va;
+
+	if ( v )
+		va = v->GetVal() ? v->GetVal() : IntrusivePtr{NewRef{}, this};
+
+	if ( subnets && ! subnets->Remove(&index) )
 		reporter->InternalWarning("index not in prefix table");
 
-	delete k;
 	delete v;
 
 	Modified();
 
+	if ( broker_forward && ! broker_store.empty() )
+		SendToStore(&index, nullptr, ELEMENT_REMOVED);
+
 	if ( change_func )
-		CallChangeFunc(index, va.get(), ELEMENT_REMOVED);
+		{
+		// this is totally cheating around the fact that we need a Intrusive pointer.
+		ValPtr changefunc_val = RecreateIndex(*(k.get()));
+		CallChangeFunc(changefunc_val, va, ELEMENT_REMOVED);
+		}
 
 	return va;
 	}
 
-IntrusivePtr<Val> TableVal::Delete(const HashKey* k)
+ValPtr TableVal::Remove(const HashKey& k)
 	{
 	TableEntryVal* v = AsNonConstTable()->RemoveEntry(k);
-	IntrusivePtr<Val> va{NewRef{}, v ? (v->Value() ? v->Value() : this) : nullptr};
+	ValPtr va;
+
+	if ( v )
+		va = v->GetVal() ? v->GetVal() : IntrusivePtr{NewRef{}, this};
 
 	if ( subnets )
 		{
@@ -2089,36 +2307,40 @@ IntrusivePtr<Val> TableVal::Delete(const HashKey* k)
 
 	Modified();
 
-	if ( change_func && va )
+	if ( va && ( change_func || ! broker_store.empty() ) )
 		{
 		auto index = table_hash->RecoverVals(k);
-		CallChangeFunc(index.get(), va.get(), ELEMENT_REMOVED);
+		if ( ! broker_store.empty() )
+			SendToStore(index.get(), nullptr, ELEMENT_REMOVED);
+
+		if ( change_func && va )
+			CallChangeFunc(index, va, ELEMENT_REMOVED);
 		}
 
 	return va;
 	}
 
-ListVal* TableVal::ConvertToList(TypeTag t) const
+ListValPtr TableVal::ToListVal(TypeTag t) const
 	{
-	ListVal* l = new ListVal(t);
+	auto l = make_intrusive<zeek::ListVal>(t);
 
-	const PDict<TableEntryVal>* tbl = AsTable();
+	const PDict<zeek::TableEntryVal>* tbl = AsTable();
 	IterCookie* c = tbl->InitForIteration();
 
 	HashKey* k;
 	while ( tbl->NextEntry(k, c) )
 		{
-		auto index = table_hash->RecoverVals(k);
+		auto index = table_hash->RecoverVals(*k);
 
 		if ( t == TYPE_ANY )
-			l->Append(index.release());
+			l->Append(std::move(index));
 		else
 			{
 			// We're expecting a pure list, flatten the ListVal.
 			if ( index->Length() != 1 )
-				InternalWarning("bad index in TableVal::ConvertToList");
+				InternalWarning("bad index in TableVal::ToListVal");
 
-			l->Append(index->Index(0)->Ref());
+			l->Append(index->Idx(0));
 			}
 
 		delete k;
@@ -2127,26 +2349,36 @@ ListVal* TableVal::ConvertToList(TypeTag t) const
 	return l;
 	}
 
-ListVal* TableVal::ConvertToPureList() const
+ListVal* TableVal::ConvertToList(TypeTag t) const
 	{
-	type_list* tl = table_type->Indices()->Types();
-	if ( tl->length() != 1 )
+	return ToListVal().release();
+	}
+
+ListValPtr TableVal::ToPureListVal() const
+	{
+	const auto& tl = table_type->GetIndices()->GetTypes();
+	if ( tl.size() != 1 )
 		{
-		InternalWarning("bad index type in TableVal::ConvertToPureList");
+		InternalWarning("bad index type in TableVal::ToPureListVal");
 		return nullptr;
 		}
 
-	return ConvertToList((*tl)[0]->Tag());
+	return ToListVal(tl[0]->Tag());
 	}
 
-Attr* TableVal::FindAttr(attr_tag t) const
+ListVal* TableVal::ConvertToPureList() const
 	{
-	return attrs ? attrs->FindAttr(t) : nullptr;
+	return ToPureListVal().release();
+	}
+
+const detail::AttrPtr& TableVal::GetAttr(detail::AttrTag t) const
+	{
+	return attrs ? attrs->Find(t) : detail::Attr::nil;
 	}
 
 void TableVal::Describe(ODesc* d) const
 	{
-	const PDict<TableEntryVal>* tbl = AsTable();
+	const PDict<zeek::TableEntryVal>* tbl = AsTable();
 	int n = tbl->Length();
 
 	if ( d->IsBinary() || d->IsPortable() )
@@ -2173,7 +2405,7 @@ void TableVal::Describe(ODesc* d) const
 		if ( ! v )
 			reporter->InternalError("hash table underflow in TableVal::Describe");
 
-		auto vl = table_hash->RecoverVals(k);
+		auto vl = table_hash->RecoverVals(*k);
 		int dim = vl->Length();
 
 		if ( i > 0 )
@@ -2209,8 +2441,8 @@ void TableVal::Describe(ODesc* d) const
 			{
 			if ( d->IsReadable() )
 				d->AddSP("] =");
-			if ( v->Value() )
-				v->Value()->Describe(d);
+			if ( v->GetVal() )
+				v->GetVal()->Describe(d);
 			}
 
 		if ( d->IsReadable() && ! d->IsShort() && d->IncludeStats() )
@@ -2230,23 +2462,26 @@ void TableVal::Describe(ODesc* d) const
 		}
 	}
 
-bool TableVal::ExpandCompoundAndInit(val_list* vl, int k, IntrusivePtr<Val> new_val)
+bool TableVal::ExpandCompoundAndInit(ListVal* lv, int k, ValPtr new_val)
 	{
-	Val* ind_k_v = (*vl)[k];
-	auto ind_k = ind_k_v->Type()->IsSet() ?
-	      IntrusivePtr<ListVal>{AdoptRef{}, ind_k_v->AsTableVal()->ConvertToList()} :
-	      IntrusivePtr<ListVal>{NewRef{}, ind_k_v->AsListVal()};
+	Val* ind_k_v = lv->Idx(k).get();
+	auto ind_k = ind_k_v->GetType()->IsSet() ?
+	      ind_k_v->AsTableVal()->ToListVal() :
+	      ListValPtr{NewRef{}, ind_k_v->AsListVal()};
 
 	for ( int i = 0; i < ind_k->Length(); ++i )
 		{
-		Val* ind_k_i = ind_k->Index(i);
-		auto expd = make_intrusive<ListVal>(TYPE_ANY);
-		loop_over_list(*vl, j)
+		const auto& ind_k_i = ind_k->Idx(i);
+		auto expd = make_intrusive<zeek::ListVal>(TYPE_ANY);
+
+		for ( auto j = 0; j < lv->Length(); ++j )
 			{
+			const auto& v = lv->Idx(j);
+
 			if ( j == k )
-				expd->Append(ind_k_i->Ref());
+				expd->Append(ind_k_i);
 			else
-				expd->Append((*vl)[j]->Ref());
+				expd->Append(v);
 			}
 
 		if ( ! ExpandAndInit(std::move(expd), new_val) )
@@ -2256,33 +2491,34 @@ bool TableVal::ExpandCompoundAndInit(val_list* vl, int k, IntrusivePtr<Val> new_
 	return true;
 	}
 
-bool TableVal::CheckAndAssign(Val* index, IntrusivePtr<Val> new_val)
+bool TableVal::CheckAndAssign(ValPtr index, ValPtr new_val)
 	{
 	Val* v = nullptr;
 	if ( subnets )
 		// We need an exact match here.
-		v = (Val*) subnets->Lookup(index, true);
+		v = (Val*) subnets->Lookup(index.get(), true);
 	else
-		v = Lookup(index, false).get();
+		v = Find(index).get();
 
 	if ( v )
 		index->Warn("multiple initializations for index");
 
-	return Assign(index, std::move(new_val));
+	return Assign(std::move(index), std::move(new_val));
 	}
 
-void TableVal::InitDefaultFunc(Frame* f)
+void TableVal::InitDefaultFunc(zeek::detail::Frame* f)
 	{
 	// Value aready initialized.
 	if ( def_val )
 		return;
 
-	Attr* def_attr = FindAttr(ATTR_DEFAULT);
+	const auto& def_attr = GetAttr(detail::ATTR_DEFAULT);
+
 	if ( ! def_attr )
 		return;
 
-	BroType* ytype = Type()->YieldType();
-	BroType* dtype = def_attr->AttrExpr()->Type();
+	const auto& ytype = GetType()->Yield();
+	const auto& dtype = def_attr->GetExpr()->GetType();
 
 	if ( dtype->Tag() == TYPE_RECORD && ytype->Tag() == TYPE_RECORD &&
 	     ! same_type(dtype, ytype) &&
@@ -2290,7 +2526,7 @@ void TableVal::InitDefaultFunc(Frame* f)
 					 ytype->AsRecordType()) )
 		return; // TableVal::Default will handle this.
 
-	def_val = def_attr->AttrExpr()->Eval(f);
+	def_val = def_attr->GetExpr()->Eval(f);
 	}
 
 void TableVal::InitTimer(double delay)
@@ -2304,7 +2540,7 @@ void TableVal::DoExpire(double t)
 	if ( ! type )
 		return; // FIX ME ###
 
-	PDict<TableEntryVal>* tbl = AsNonConstTable();
+	PDict<zeek::TableEntryVal>* tbl = AsNonConstTable();
 
 	double timeout = GetExpireTime();
 
@@ -2338,11 +2574,11 @@ void TableVal::DoExpire(double t)
 
 		else if ( v->ExpireAccessTime() + timeout < t )
 			{
-			IntrusivePtr<ListVal> idx = nullptr;
+			ListValPtr idx = nullptr;
 
 			if ( expire_func )
 				{
-				idx = RecoverIndex(k);
+				idx = RecreateIndex(*k);
 				double secs = CallExpireFunc(idx);
 
 				// It's possible that the user-provided
@@ -2372,7 +2608,7 @@ void TableVal::DoExpire(double t)
 			if ( subnets )
 				{
 				if ( ! idx )
-					idx = RecoverIndex(k);
+					idx = RecreateIndex(*k);
 				if ( ! subnets->Remove(idx.get()) )
 					reporter->InternalWarning("index not in prefix table");
 				}
@@ -2381,8 +2617,9 @@ void TableVal::DoExpire(double t)
 			if ( change_func )
 				{
 				if ( ! idx )
-					idx = RecoverIndex(k);
-				CallChangeFunc(idx.get(), v->Value(), ELEMENT_EXPIRED);
+					idx = RecreateIndex(*k);
+
+				CallChangeFunc(idx, v->GetVal(), ELEMENT_EXPIRED);
 				}
 
 			delete v;
@@ -2432,7 +2669,7 @@ double TableVal::GetExpireTime()
 	return -1;
 	}
 
-double TableVal::CallExpireFunc(IntrusivePtr<ListVal> idx)
+double TableVal::CallExpireFunc(ListValPtr idx)
 	{
 	if ( ! expire_func )
 		return 0;
@@ -2447,28 +2684,27 @@ double TableVal::CallExpireFunc(IntrusivePtr<ListVal> idx)
 			// Will have been reported already.
 			return 0;
 
-		if ( vf->Type()->Tag() != TYPE_FUNC )
+		if ( vf->GetType()->Tag() != TYPE_FUNC )
 			{
 			vf->Error("not a function");
 			return 0;
 			}
 
-		const Func* f = vf->AsFunc();
-		zeek::Args vl;
+		const zeek::Func* f = vf->AsFunc();
+		Args vl;
 
-		const auto func_args = f->FType()->ArgTypes()->Types();
-
+		const auto& func_args = f->GetType()->ParamList()->GetTypes();
 		// backwards compatibility with idx: any idiom
-		bool any_idiom = func_args->length() == 2 && func_args->back()->Tag() == TYPE_ANY;
+		bool any_idiom = func_args.size() == 2 && func_args.back()->Tag() == TYPE_ANY;
 
 		if ( ! any_idiom )
 			{
-			const auto& index_list = *idx->AsListVal()->Vals();
-			vl.reserve(1 + index_list.length());
+			auto lv = idx->AsListVal();
+			vl.reserve(1 + lv->Length());
 			vl.emplace_back(NewRef{}, this);
 
-			for ( const auto& v : index_list )
-				vl.emplace_back(NewRef{}, v);
+			for ( const auto& v : lv->Vals() )
+				vl.emplace_back(v);
 			}
 		else
 			{
@@ -2478,12 +2714,12 @@ double TableVal::CallExpireFunc(IntrusivePtr<ListVal> idx)
 			ListVal* idx_list = idx->AsListVal();
 			// Flatten if only one element
 			if ( idx_list->Length() == 1 )
-				vl.emplace_back(NewRef{}, idx_list->Index(0));
+				vl.emplace_back(idx_list->Idx(0));
 			else
 				vl.emplace_back(std::move(idx));
 			}
 
-		auto result = f->Call(vl);
+		auto result = f->Invoke(&vl);
 
 		if ( result )
 			secs = result->AsInterval();
@@ -2496,12 +2732,12 @@ double TableVal::CallExpireFunc(IntrusivePtr<ListVal> idx)
 	return secs;
 	}
 
-IntrusivePtr<Val> TableVal::DoClone(CloneState* state)
+ValPtr TableVal::DoClone(CloneState* state)
 	{
-	auto tv = make_intrusive<TableVal>(table_type);
+	auto tv = make_intrusive<zeek::TableVal>(table_type);
 	state->NewClone(this, tv);
 
-	const PDict<TableEntryVal>* tbl = AsTable();
+	const PDict<zeek::TableEntryVal>* tbl = AsTable();
 	IterCookie* cookie = tbl->InitForIteration();
 
 	HashKey* key;
@@ -2513,7 +2749,7 @@ IntrusivePtr<Val> TableVal::DoClone(CloneState* state)
 
 		if ( subnets )
 			{
-			auto idx = RecoverIndex(key);
+			auto idx = RecreateIndex(*key);
 			tv->subnets->Insert(idx.get(), nval);
 			}
 
@@ -2545,14 +2781,14 @@ unsigned int TableVal::MemoryAllocation() const
 	{
 	unsigned int size = 0;
 
-	PDict<TableEntryVal>* v = val.table_val;
+	PDict<zeek::TableEntryVal>* v = val.table_val;
 	IterCookie* c = v->InitForIteration();
 
 	TableEntryVal* tv;
 	while ( (tv = v->NextEntry(c)) )
 		{
-		if ( tv->Value() )
-			size += tv->Value()->MemoryAllocation();
+		if ( tv->GetVal() )
+			size += tv->GetVal()->MemoryAllocation();
 		size += padded_sizeof(TableEntryVal);
 		}
 
@@ -2561,8 +2797,11 @@ unsigned int TableVal::MemoryAllocation() const
 	}
 
 HashKey* TableVal::ComputeHash(const Val* index) const
+	{ return MakeHashKey(*index).release(); }
+
+std::unique_ptr<HashKey> TableVal::MakeHashKey(const Val& index) const
 	{
-	return table_hash->ComputeHash(index, true);
+	return table_hash->MakeHashKey(index, true);
 	}
 
 void TableVal::SaveParseTimeTableState(RecordType* rt)
@@ -2593,7 +2832,7 @@ void TableVal::DoneParsing()
 
 TableVal::ParseTimeTableState TableVal::DumpTableState()
 	{
-	const PDict<TableEntryVal>* tbl = AsTable();
+	const PDict<zeek::TableEntryVal>* tbl = AsTable();
 	IterCookie* cookie = tbl->InitForIteration();
 
 	HashKey* key;
@@ -2603,9 +2842,7 @@ TableVal::ParseTimeTableState TableVal::DumpTableState()
 
 	while ( (val = tbl->NextEntry(key, cookie)) )
 		{
-		rval.emplace_back(RecoverIndex(key),
-		                  IntrusivePtr<Val>{NewRef{}, val->Value()});
-
+		rval.emplace_back(RecreateIndex(*key), val->GetVal());
 		delete key;
 		}
 
@@ -2616,11 +2853,10 @@ TableVal::ParseTimeTableState TableVal::DumpTableState()
 void TableVal::RebuildTable(ParseTimeTableState ptts)
 	{
 	delete table_hash;
-	table_hash = new CompositeHash(IntrusivePtr<TypeList>(NewRef{},
-	                               table_type->Indices()));
+	table_hash = new CompositeHash(table_type->GetIndices());
 
 	for ( auto& [key, val] : ptts )
-		Assign(key.get(), val.release());
+		Assign(std::move(key), std::move(val));
 	}
 
 TableVal::ParseTimeTableStates TableVal::parse_time_table_states;
@@ -2629,14 +2865,20 @@ TableVal::TableRecordDependencies TableVal::parse_time_table_record_dependencies
 
 RecordVal::RecordTypeValMap RecordVal::parse_time_records;
 
-RecordVal::RecordVal(RecordType* t, bool init_fields) : Val(t)
+RecordVal::RecordVal(RecordType* t, bool init_fields)
+	: RecordVal({NewRef{}, t}, init_fields)
+	{}
+
+RecordVal::RecordVal(RecordTypePtr t, bool init_fields) : Val(std::move(t))
 	{
 	origin = nullptr;
-	int n = t->NumFields();
-	val_list* vl = val.val_list_val = new val_list(n);
+	auto rt = GetType()->AsRecordType();
+	int n = rt->NumFields();
+	auto vl = val.record_val = new std::vector<ValPtr>;
+	vl->reserve(n);
 
 	if ( is_parsing )
-		parse_time_records[t].emplace_back(NewRef{}, this);
+		parse_time_records[rt].emplace_back(NewRef{}, this);
 
 	if ( ! init_fields )
 		return;
@@ -2645,54 +2887,53 @@ RecordVal::RecordVal(RecordType* t, bool init_fields) : Val(t)
 	// by default).
 	for ( int i = 0; i < n; ++i )
 		{
-		Attributes* a = t->FieldDecl(i)->attrs.get();
-		Attr* def_attr = a ? a->FindAttr(ATTR_DEFAULT) : nullptr;
-		auto def = def_attr ? def_attr->AttrExpr()->Eval(nullptr) : nullptr;
-		BroType* type = t->FieldDecl(i)->type.get();
+		detail::Attributes* a = rt->FieldDecl(i)->attrs.get();
+		detail::Attr* def_attr = a ? a->Find(detail::ATTR_DEFAULT).get() : nullptr;
+		auto def = def_attr ? def_attr->GetExpr()->Eval(nullptr) : nullptr;
+		const auto& type = rt->FieldDecl(i)->type;
 
 		if ( def && type->Tag() == TYPE_RECORD &&
-		     def->Type()->Tag() == TYPE_RECORD &&
-		     ! same_type(def->Type(), type) )
+		     def->GetType()->Tag() == TYPE_RECORD &&
+		     ! same_type(def->GetType(), type) )
 			{
-			auto tmp = def->AsRecordVal()->CoerceTo(type->AsRecordType());
+			auto tmp = def->AsRecordVal()->CoerceTo(cast_intrusive<RecordType>(type));
 
 			if ( tmp )
 				def = std::move(tmp);
 			}
 
-		if ( ! def && ! (a && a->FindAttr(ATTR_OPTIONAL)) )
+		if ( ! def && ! (a && a->Find(detail::ATTR_OPTIONAL)) )
 			{
 			TypeTag tag = type->Tag();
 
 			if ( tag == TYPE_RECORD )
-				def = make_intrusive<RecordVal>(type->AsRecordType());
+				def = make_intrusive<zeek::RecordVal>(cast_intrusive<RecordType>(type));
 
 			else if ( tag == TYPE_TABLE )
-				def = make_intrusive<TableVal>(IntrusivePtr{NewRef{}, type->AsTableType()},
-				                               IntrusivePtr{NewRef{}, a});
+				def = make_intrusive<zeek::TableVal>(IntrusivePtr{NewRef{}, type->AsTableType()},
+				                                     IntrusivePtr{NewRef{}, a});
 
 			else if ( tag == TYPE_VECTOR )
-				def = make_intrusive<VectorVal>(type->AsVectorType());
+				def = make_intrusive<zeek::VectorVal>(cast_intrusive<VectorType>(type));
 			}
 
-		vl->push_back(def.release());
+		vl->emplace_back(std::move(def));
 		}
 	}
 
 RecordVal::~RecordVal()
 	{
-	delete_vals(AsNonConstRecord());
+	delete AsNonConstRecord();
 	}
 
-IntrusivePtr<Val> RecordVal::SizeVal() const
+ValPtr RecordVal::SizeVal() const
 	{
-	return val_mgr->Count(Type()->AsRecordType()->NumFields());
+	return zeek::val_mgr->Count(GetType()->AsRecordType()->NumFields());
 	}
 
-void RecordVal::Assign(int field, IntrusivePtr<Val> new_val)
+void RecordVal::Assign(int field, ValPtr new_val)
 	{
-	Val* old_val = AsNonConstRecord()->replace(field, new_val.release());
-	Unref(old_val);
+	(*AsNonConstRecord())[field] = std::move(new_val);
 	Modified();
 	}
 
@@ -2701,19 +2942,14 @@ void RecordVal::Assign(int field, Val* new_val)
 	Assign(field, {AdoptRef{}, new_val});
 	}
 
-Val* RecordVal::Lookup(int field) const
+ValPtr RecordVal::GetFieldOrDefault(int field) const
 	{
-	return (*AsRecord())[field];
-	}
-
-IntrusivePtr<Val> RecordVal::LookupWithDefault(int field) const
-	{
-	Val* val = (*AsRecord())[field];
+	const auto& val = (*AsRecord())[field];
 
 	if ( val )
-		return {NewRef{}, val};
+		return val;
 
-	return Type()->AsRecordType()->FieldDefault(field);
+	return GetType()->AsRecordType()->FieldDefault(field);
 	}
 
 void RecordVal::ResizeParseTimeRecords(RecordType* rt)
@@ -2727,16 +2963,16 @@ void RecordVal::ResizeParseTimeRecords(RecordType* rt)
 
 	for ( auto& rv : rvs )
 		{
-		auto vs = rv->val.val_list_val;
-		auto current_length = vs->length();
+		auto vs = rv->val.record_val;
+		int current_length = vs->size();
 		auto required_length = rt->NumFields();
 
 		if ( required_length > current_length )
 			{
-			vs->resize(required_length);
+			vs->reserve(required_length);
 
 			for ( auto i = current_length; i < required_length; ++i )
-				vs->replace(i, rt->FieldDefault(i).release());
+				vs->emplace_back(rt->FieldDefault(i));
 			}
 		}
 	}
@@ -2746,28 +2982,38 @@ void RecordVal::DoneParsing()
 	parse_time_records.clear();
 	}
 
-IntrusivePtr<Val> RecordVal::Lookup(const char* field, bool with_default) const
+const ValPtr& RecordVal::GetField(const char* field) const
 	{
-	int idx = Type()->AsRecordType()->FieldOffset(field);
+	int idx = GetType()->AsRecordType()->FieldOffset(field);
 
 	if ( idx < 0 )
 		reporter->InternalError("missing record field: %s", field);
 
-	return with_default ? LookupWithDefault(idx) : IntrusivePtr{NewRef{}, Lookup(idx)};
+	return GetField(idx);
 	}
 
-IntrusivePtr<RecordVal> RecordVal::CoerceTo(const RecordType* t, Val* aggr, bool allow_orphaning) const
+ValPtr RecordVal::GetFieldOrDefault(const char* field) const
 	{
-	if ( ! record_promotion_compatible(t->AsRecordType(), Type()->AsRecordType()) )
+	int idx = GetType()->AsRecordType()->FieldOffset(field);
+
+	if ( idx < 0 )
+		reporter->InternalError("missing record field: %s", field);
+
+	return GetFieldOrDefault(idx);
+	}
+
+RecordValPtr RecordVal::CoerceTo(RecordTypePtr t,
+                                 RecordValPtr aggr,
+                                 bool allow_orphaning) const
+	{
+	if ( ! record_promotion_compatible(t.get(), GetType()->AsRecordType()) )
 		return nullptr;
 
 	if ( ! aggr )
-		aggr = new RecordVal(const_cast<RecordType*>(t->AsRecordType()));
+		aggr = make_intrusive<zeek::RecordVal>(std::move(t));
 
-	RecordVal* ar = aggr->AsRecordVal();
-	RecordType* ar_t = aggr->Type()->AsRecordType();
-
-	const RecordType* rv_t = Type()->AsRecordType();
+	RecordType* ar_t = aggr->GetType()->AsRecordType();
+	const RecordType* rv_t = GetType()->AsRecordType();
 
 	int i;
 	for ( i = 0; i < rv_t->NumFields(); ++i )
@@ -2787,28 +3033,29 @@ IntrusivePtr<RecordVal> RecordVal::CoerceTo(const RecordType* t, Val* aggr, bool
 			break;
 			}
 
-		Val* v = Lookup(i);
+		const auto& v = GetField(i);
 
 		if ( ! v )
 			// Check for allowable optional fields is outside the loop, below.
 			continue;
 
-		if ( ar_t->FieldType(t_i)->Tag() == TYPE_RECORD &&
-		     ! same_type(ar_t->FieldType(t_i), v->Type()) )
+		const auto& ft = ar_t->GetFieldType(t_i);
+
+		if ( ft->Tag() == TYPE_RECORD && ! same_type(ft, v->GetType()) )
 			{
-			auto rhs = make_intrusive<ConstExpr>(IntrusivePtr{NewRef{}, v});
-			auto e = make_intrusive<RecordCoerceExpr>(std::move(rhs),
-			        IntrusivePtr{NewRef{}, ar_t->FieldType(t_i)->AsRecordType()});
-			ar->Assign(t_i, e->Eval(nullptr));
+			auto rhs = make_intrusive<detail::ConstExpr>(v);
+			auto e = make_intrusive<detail::RecordCoerceExpr>(
+				std::move(rhs), cast_intrusive<RecordType>(ft));
+			aggr->Assign(t_i, e->Eval(nullptr));
 			continue;
 			}
 
-		ar->Assign(t_i, {NewRef{}, v});
+		aggr->Assign(t_i, v);
 		}
 
 	for ( i = 0; i < ar_t->NumFields(); ++i )
-		if ( ! ar->Lookup(i) &&
-			 ! ar_t->FieldDecl(i)->FindAttr(ATTR_OPTIONAL) )
+		if ( ! aggr->GetField(i) &&
+		     ! ar_t->FieldDecl(i)->GetAttr(detail::ATTR_OPTIONAL) )
 			{
 			char buf[512];
 			snprintf(buf, sizeof(buf),
@@ -2816,39 +3063,39 @@ IntrusivePtr<RecordVal> RecordVal::CoerceTo(const RecordType* t, Val* aggr, bool
 			Error(buf);
 			}
 
-	return {AdoptRef{}, ar};
+	return aggr;
 	}
 
-IntrusivePtr<RecordVal> RecordVal::CoerceTo(RecordType* t, bool allow_orphaning)
+RecordValPtr RecordVal::CoerceTo(RecordTypePtr t, bool allow_orphaning)
 	{
-	if ( same_type(Type(), t) )
+	if ( same_type(GetType(), t) )
 		return {NewRef{}, this};
 
-	return CoerceTo(t, nullptr, allow_orphaning);
+	return CoerceTo(std::move(t), nullptr, allow_orphaning);
 	}
 
-IntrusivePtr<TableVal> RecordVal::GetRecordFieldsVal() const
+TableValPtr RecordVal::GetRecordFieldsVal() const
 	{
-	return Type()->AsRecordType()->GetRecordFieldsVal(this);
+	return GetType()->AsRecordType()->GetRecordFieldsVal(this);
 	}
 
 void RecordVal::Describe(ODesc* d) const
 	{
-	const val_list* vl = AsRecord();
-	int n = vl->length();
-	auto record_type = Type()->AsRecordType();
+	auto vl = AsRecord();
+	auto n = vl->size();
+	auto record_type = GetType()->AsRecordType();
 
 	if ( d->IsBinary() || d->IsPortable() )
 		{
 		record_type->Describe(d);
 		d->SP();
-		d->Add(n);
+		d->Add(static_cast<uint64_t>(n));
 		d->SP();
 		}
 	else
 		d->Add("[");
 
-	loop_over_list(*vl, i)
+	for ( size_t i = 0; i < n; ++i )
 		{
 		if ( ! d->IsBinary() && i > 0 )
 			d->Add(", ");
@@ -2858,7 +3105,8 @@ void RecordVal::Describe(ODesc* d) const
 		if ( ! d->IsBinary() )
 			d->Add("=");
 
-		Val* v = (*vl)[i];
+		const auto& v = (*vl)[i];
+
 		if ( v )
 			v->Describe(d);
 		else
@@ -2871,14 +3119,14 @@ void RecordVal::Describe(ODesc* d) const
 
 void RecordVal::DescribeReST(ODesc* d) const
 	{
-	const val_list* vl = AsRecord();
-	int n = vl->length();
-	auto record_type = Type()->AsRecordType();
+	auto vl = AsRecord();
+	auto n = vl->size();
+	auto record_type = GetType()->AsRecordType();
 
 	d->Add("{");
 	d->PushIndent();
 
-	loop_over_list(*vl, i)
+	for ( size_t i = 0; i < n; ++i )
 		{
 		if ( i > 0 )
 			d->NL();
@@ -2886,7 +3134,7 @@ void RecordVal::DescribeReST(ODesc* d) const
 		d->Add(record_type->FieldName(i));
 		d->Add("=");
 
-		Val* v = (*vl)[i];
+		const auto& v = (*vl)[i];
 
 		if ( v )
 			v->Describe(d);
@@ -2898,21 +3146,21 @@ void RecordVal::DescribeReST(ODesc* d) const
 	d->Add("}");
 	}
 
-IntrusivePtr<Val> RecordVal::DoClone(CloneState* state)
+ValPtr RecordVal::DoClone(CloneState* state)
 	{
 	// We set origin to 0 here.  Origin only seems to be used for exactly one
 	// purpose - to find the connection record that is associated with a
 	// record. As we cannot guarantee that it will ber zeroed out at the
 	// approproate time (as it seems to be guaranteed for the original record)
 	// we don't touch it.
-	auto rv = make_intrusive<RecordVal>(Type()->AsRecordType(), false);
+	auto rv = make_intrusive<zeek::RecordVal>(GetType<RecordType>(), false);
 	rv->origin = nullptr;
 	state->NewClone(this, rv);
 
-	for ( const auto& vlv : *val.val_list_val )
+	for ( const auto& vlv : *val.record_val)
 		{
 		auto v = vlv ? vlv->Clone(state) : nullptr;
-  		rv->val.val_list_val->push_back(v.release());
+  		rv->val.record_val->emplace_back(std::move(v));
 		}
 
 	return rv;
@@ -2921,20 +3169,22 @@ IntrusivePtr<Val> RecordVal::DoClone(CloneState* state)
 unsigned int RecordVal::MemoryAllocation() const
 	{
 	unsigned int size = 0;
-	const val_list* vl = AsRecord();
+	const auto& vl = *AsRecord();
 
-	for ( const auto& v : *vl )
+	for ( const auto& v : vl )
 		{
 		if ( v )
 		    size += v->MemoryAllocation();
 		}
 
-	return size + padded_sizeof(*this) + val.val_list_val->MemoryAllocation();
+	size += pad_size(vl.capacity() * sizeof(ValPtr));
+	size += padded_sizeof(vl);
+	return size + padded_sizeof(*this);
 	}
 
-IntrusivePtr<Val> EnumVal::SizeVal() const
+ValPtr EnumVal::SizeVal() const
 	{
-	return val_mgr->Int(val.int_val);
+	return zeek::val_mgr->Int(val.int_val);
 	}
 
 void EnumVal::ValDescribe(ODesc* d) const
@@ -2947,94 +3197,73 @@ void EnumVal::ValDescribe(ODesc* d) const
 	d->Add(ename);
 	}
 
-IntrusivePtr<Val> EnumVal::DoClone(CloneState* state)
+ValPtr EnumVal::DoClone(CloneState* state)
 	{
 	// Immutable.
 	return {NewRef{}, this};
 	}
 
-VectorVal::VectorVal(VectorType* t) : Val(t)
+VectorVal::VectorVal(VectorType* t) : VectorVal({NewRef{}, t})
+	{ }
+
+VectorVal::VectorVal(VectorTypePtr t) : Val(std::move(t))
 	{
-	vector_type = t->Ref()->AsVectorType();
-	val.vector_val = new vector<Val*>();
+	val.vector_val = new vector<ValPtr>();
 	}
 
 VectorVal::~VectorVal()
 	{
-	for ( unsigned int i = 0; i < val.vector_val->size(); ++i )
-		Unref((*val.vector_val)[i]);
-
-	Unref(vector_type);
-
 	delete val.vector_val;
 	}
 
-IntrusivePtr<Val> VectorVal::SizeVal() const
+ValPtr VectorVal::SizeVal() const
 	{
-	return val_mgr->Count(uint32_t(val.vector_val->size()));
+	return zeek::val_mgr->Count(uint32_t(val.vector_val->size()));
 	}
 
-bool VectorVal::Assign(unsigned int index, IntrusivePtr<Val> element)
+bool VectorVal::Assign(unsigned int index, ValPtr element)
 	{
 	if ( element &&
-	     ! same_type(element->Type(), vector_type->YieldType(), false) )
+	     ! same_type(element->GetType(), GetType()->AsVectorType()->Yield(), false) )
 		return false;
 
-	Val* val_at_index = nullptr;
-
-	if ( index < val.vector_val->size() )
-		val_at_index = (*val.vector_val)[index];
-	else
+	if ( index >= val.vector_val->size() )
 		val.vector_val->resize(index + 1);
 
-	Unref(val_at_index);
-
-	// Note: we do *not* Ref() the element, if any, at this point.
-	// AssignExpr::Eval() already does this; other callers must remember
-	// to do it similarly.
-	(*val.vector_val)[index] = element.release();
+	(*val.vector_val)[index] = std::move(element);
 
 	Modified();
 	return true;
 	}
 
-bool VectorVal::Assign(unsigned int index, Val* element)
-	{
-	return Assign(index, {AdoptRef{}, element});
-	}
-
 bool VectorVal::AssignRepeat(unsigned int index, unsigned int how_many,
-				Val* element)
+                             ValPtr element)
 	{
 	ResizeAtLeast(index + how_many);
 
 	for ( unsigned int i = index; i < index + how_many; ++i )
-		if ( ! Assign(i, {NewRef{}, element}) )
+		if ( ! Assign(i, element) )
 			return false;
 
 	return true;
 	}
 
-bool VectorVal::Insert(unsigned int index, Val* element)
+bool VectorVal::Insert(unsigned int index, ValPtr element)
 	{
 	if ( element &&
-	     ! same_type(element->Type(), vector_type->YieldType(), false) )
+	     ! same_type(element->GetType(), GetType()->AsVectorType()->Yield(), false) )
 		{
-		Unref(element);
 		return false;
 		}
 
-	vector<Val*>::iterator it;
+	vector<ValPtr>::iterator it;
 
 	if ( index < val.vector_val->size() )
 		it = std::next(val.vector_val->begin(), index);
 	else
 		it = val.vector_val->end();
 
-	// Note: we do *not* Ref() the element, if any, at this point.
-	// AssignExpr::Eval() already does this; other callers must remember
-	// to do it similarly.
-	val.vector_val->insert(it, element);
+	val.vector_val->insert(it, std::move(element));
 
 	Modified();
 	return true;
@@ -3045,10 +3274,8 @@ bool VectorVal::Remove(unsigned int index)
 	if ( index >= val.vector_val->size() )
 		return false;
 
-	Val* val_at_index = (*val.vector_val)[index];
 	auto it = std::next(val.vector_val->begin(), index);
 	val.vector_val->erase(it);
-	Unref(val_at_index);
 
 	Modified();
 	return true;
@@ -3056,7 +3283,7 @@ bool VectorVal::Remove(unsigned int index)
 
 bool VectorVal::AddTo(Val* val, bool /* is_first_init */) const
 	{
-	if ( val->Type()->Tag() != TYPE_VECTOR )
+	if ( val->GetType()->Tag() != TYPE_VECTOR )
 		{
 		val->Error("not a vector");
 		return false;
@@ -3064,24 +3291,24 @@ bool VectorVal::AddTo(Val* val, bool /* is_first_init */) const
 
 	VectorVal* v = val->AsVectorVal();
 
-	if ( ! same_type(type, v->Type()) )
+	if ( ! same_type(type, v->GetType()) )
 		{
-		type->Error("vector type clash", v->Type());
+		type->Error("vector type clash", v->GetType().get());
 		return false;
 		}
 
 	auto last_idx = v->Size();
 
 	for ( auto i = 0u; i < Size(); ++i )
-		v->Assign(last_idx++, {NewRef{}, Lookup(i)});
+		v->Assign(last_idx++, At(i));
 
 	return true;
 	}
 
-Val* VectorVal::Lookup(unsigned int index) const
+const ValPtr& VectorVal::At(unsigned int index) const
 	{
 	if ( index >= val.vector_val->size() )
-		return nullptr;
+		return Val::nil;
 
 	return (*val.vector_val)[index];
 	}
@@ -3103,16 +3330,16 @@ unsigned int VectorVal::ResizeAtLeast(unsigned int new_num_elements)
 	 return Resize(new_num_elements);
 	 }
 
-IntrusivePtr<Val> VectorVal::DoClone(CloneState* state)
+ValPtr VectorVal::DoClone(CloneState* state)
 	{
-	auto vv = make_intrusive<VectorVal>(vector_type);
+	auto vv = make_intrusive<zeek::VectorVal>(GetType<VectorType>());
 	vv->val.vector_val->reserve(val.vector_val->size());
 	state->NewClone(this, vv);
 
 	for ( unsigned int i = 0; i < val.vector_val->size(); ++i )
 		{
 		auto v = (*val.vector_val)[i]->Clone(state);
-		vv->val.vector_val->push_back(v.release());
+		vv->val.vector_val->push_back(std::move(v));
 		}
 
 	return vv;
@@ -3137,16 +3364,15 @@ void VectorVal::ValDescribe(ODesc* d) const
 	d->Add("]");
 	}
 
-IntrusivePtr<Val> check_and_promote(IntrusivePtr<Val> v, const BroType* t,
-                                    bool is_init,
-                                    const Location* expr_location)
+ValPtr check_and_promote(ValPtr v,
+                         const Type* t,
+                         bool is_init,
+                         const zeek::detail::Location* expr_location)
 	{
 	if ( ! v )
 		return nullptr;
 
-	BroType* vt = v->Type();
-
-	vt = flatten_type(vt);
+	Type* vt = flatten_type(v->GetType().get());
 	t = flatten_type(t);
 
 	TypeTag t_tag = t->Tag();
@@ -3198,7 +3424,7 @@ IntrusivePtr<Val> check_and_promote(IntrusivePtr<Val> v, const BroType* t,
 		// Already has the right internal type.
 		return v;
 
-	IntrusivePtr<Val> promoted_v;
+	ValPtr promoted_v;
 
 	switch ( it ) {
 	case TYPE_INTERNAL_INT:
@@ -3208,7 +3434,7 @@ IntrusivePtr<Val> check_and_promote(IntrusivePtr<Val> v, const BroType* t,
 			return nullptr;
 			}
 		else if ( t_tag == TYPE_INT )
-			promoted_v = val_mgr->Int(v->CoerceToInt());
+			promoted_v = zeek::val_mgr->Int(v->CoerceToInt());
 		else // enum
 			{
 			reporter->InternalError("bad internal type in check_and_promote()");
@@ -3224,7 +3450,7 @@ IntrusivePtr<Val> check_and_promote(IntrusivePtr<Val> v, const BroType* t,
 			return nullptr;
 			}
 		else if ( t_tag == TYPE_COUNT || t_tag == TYPE_COUNTER )
-			promoted_v = val_mgr->Count(v->CoerceToUnsigned());
+			promoted_v = zeek::val_mgr->Count(v->CoerceToUnsigned());
 		else // port
 			{
 			reporter->InternalError("bad internal type in check_and_promote()");
@@ -3234,7 +3460,20 @@ IntrusivePtr<Val> check_and_promote(IntrusivePtr<Val> v, const BroType* t,
 		break;
 
 	case TYPE_INTERNAL_DOUBLE:
-		promoted_v = make_intrusive<Val>(v->CoerceToDouble(), t_tag);
+		switch ( t_tag ) {
+		case TYPE_DOUBLE:
+			promoted_v = make_intrusive<zeek::DoubleVal>(v->CoerceToDouble());
+			break;
+		case TYPE_INTERVAL:
+			promoted_v = make_intrusive<zeek::IntervalVal>(v->CoerceToDouble());
+			break;
+		case TYPE_TIME:
+			promoted_v = make_intrusive<zeek::TimeVal>(v->CoerceToDouble());
+			break;
+		default:
+			reporter->InternalError("bad internal type in check_and_promote()");
+			return nullptr;
+		}
 		break;
 
 	default:
@@ -3253,17 +3492,17 @@ bool same_val(const Val* /* v1 */, const Val* /* v2 */)
 
 bool is_atomic_val(const Val* v)
 	{
-	return is_atomic_type(v->Type());
+	return is_atomic_type(v->GetType());
 	}
 
 bool same_atomic_val(const Val* v1, const Val* v2)
 	{
 	// This is a very preliminary implementation of same_val(),
 	// true only for equal, simple atomic values of same type.
-	if ( v1->Type()->Tag() != v2->Type()->Tag() )
+	if ( v1->GetType()->Tag() != v2->GetType()->Tag() )
 		return false;
 
-	switch ( v1->Type()->InternalType() ) {
+	switch ( v1->GetType()->InternalType() ) {
 	case TYPE_INTERNAL_INT:
 		return v1->InternalInt() == v2->InternalInt();
 	case TYPE_INTERNAL_UNSIGNED:
@@ -3302,7 +3541,7 @@ void describe_vals(const val_list* vals, ODesc* d, int offset)
 		}
 	}
 
-void describe_vals(const std::vector<IntrusivePtr<Val>>& vals,
+void describe_vals(const std::vector<ValPtr>& vals,
                    ODesc* d, size_t offset)
 	{
 	if ( ! d->IsReadable() )
@@ -3330,7 +3569,7 @@ void delete_vals(val_list* vals)
 		}
 	}
 
-IntrusivePtr<Val> cast_value_to_type(Val* v, BroType* t)
+ValPtr cast_value_to_type(Val* v, Type* t)
 	{
 	// Note: when changing this function, adapt all three of
 	// cast_value_to_type()/can_cast_value_to_type()/can_cast_value_to_type().
@@ -3340,23 +3579,23 @@ IntrusivePtr<Val> cast_value_to_type(Val* v, BroType* t)
 
 	// Always allow casting to same type. This also covers casting 'any'
 	// to the actual type.
-	if ( same_type(v->Type(), t) )
+	if ( same_type(v->GetType(), t) )
 		return {NewRef{}, v};
 
-	if ( same_type(v->Type(), bro_broker::DataVal::ScriptDataType()) )
+	if ( same_type(v->GetType(), bro_broker::DataVal::ScriptDataType()) )
 		{
-		auto dv = v->AsRecordVal()->Lookup(0);
+		const auto& dv = v->AsRecordVal()->GetField(0);
 
 		if ( ! dv )
 			return nullptr;
 
-		return static_cast<bro_broker::DataVal*>(dv)->castTo(t);
+		return static_cast<bro_broker::DataVal*>(dv.get())->castTo(t);
 		}
 
 	return nullptr;
 	}
 
-bool can_cast_value_to_type(const Val* v, BroType* t)
+bool can_cast_value_to_type(const Val* v, Type* t)
 	{
 	// Note: when changing this function, adapt all three of
 	// cast_value_to_type()/can_cast_value_to_type()/can_cast_value_to_type().
@@ -3366,23 +3605,23 @@ bool can_cast_value_to_type(const Val* v, BroType* t)
 
 	// Always allow casting to same type. This also covers casting 'any'
 	// to the actual type.
-	if ( same_type(v->Type(), t) )
+	if ( same_type(v->GetType(), t) )
 		return true;
 
-	if ( same_type(v->Type(), bro_broker::DataVal::ScriptDataType()) )
+	if ( same_type(v->GetType(), bro_broker::DataVal::ScriptDataType()) )
 		{
-		auto dv = v->AsRecordVal()->Lookup(0);
+		const auto& dv = v->AsRecordVal()->GetField(0);
 
 		if ( ! dv )
 			return false;
 
-		return static_cast<const bro_broker::DataVal *>(dv)->canCastTo(t);
+		return static_cast<const bro_broker::DataVal *>(dv.get())->canCastTo(t);
 		}
 
 	return false;
 	}
 
-bool can_cast_value_to_type(const BroType* s, BroType* t)
+bool can_cast_value_to_type(const Type* s, Type* t)
 	{
 	// Note: when changing this function, adapt all three of
 	// cast_value_to_type()/can_cast_value_to_type()/can_cast_value_to_type().
@@ -3401,24 +3640,24 @@ bool can_cast_value_to_type(const BroType* s, BroType* t)
 	return false;
 	}
 
-IntrusivePtr<Val> Val::MakeBool(bool b)
+ValPtr Val::MakeBool(bool b)
 	{
 	return IntrusivePtr{AdoptRef{}, new Val(bro_int_t(b), TYPE_BOOL)};
 	}
 
-IntrusivePtr<Val> Val::MakeInt(bro_int_t i)
+ValPtr Val::MakeInt(bro_int_t i)
 	{
 	return IntrusivePtr{AdoptRef{}, new Val(i, TYPE_INT)};
 	}
 
-IntrusivePtr<Val> Val::MakeCount(bro_uint_t u)
+ValPtr Val::MakeCount(bro_uint_t u)
 	{
 	return IntrusivePtr{AdoptRef{}, new Val(u, TYPE_COUNT)};
 	}
 
 ValManager::ValManager()
 	{
-	empty_string = make_intrusive<StringVal>("");
+	empty_string = make_intrusive<zeek::StringVal>("");
 	b_false = Val::MakeBool(false);
 	b_true = Val::MakeBool(true);
 
@@ -3443,7 +3682,7 @@ StringVal* ValManager::GetEmptyString() const
 	return empty_string->Ref()->AsStringVal();
 	}
 
-const IntrusivePtr<PortVal>& ValManager::Port(uint32_t port_num, TransportProto port_type) const
+const PortValPtr& ValManager::Port(uint32_t port_num, TransportProto port_type) const
 	{
 	if ( port_num >= 65536 )
 		{
@@ -3459,7 +3698,7 @@ PortVal* ValManager::GetPort(uint32_t port_num, TransportProto port_type) const
 	return Port(port_num, port_type)->Ref()->AsPortVal();
 	}
 
-const IntrusivePtr<PortVal>& ValManager::Port(uint32_t port_num) const
+const PortValPtr& ValManager::Port(uint32_t port_num) const
 	{
 	auto mask = port_num & PORT_SPACE_MASK;
 	port_num &= ~PORT_SPACE_MASK;
@@ -3478,3 +3717,5 @@ PortVal* ValManager::GetPort(uint32_t port_num) const
 	{
 	return Port(port_num)->Ref()->AsPortVal();
 	}
+
+}

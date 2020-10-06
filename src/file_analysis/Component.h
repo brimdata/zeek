@@ -8,12 +8,16 @@
 
 #include "../zeek-config.h"
 
-class RecordVal;
+ZEEK_FORWARD_DECLARE_NAMESPACED(RecordVal, zeek);
+namespace zeek {
+using RecordValPtr = zeek::IntrusivePtr<RecordVal>;
+}
 
 namespace file_analysis {
 
 class File;
 class Analyzer;
+class Manager;
 
 /**
  * Component description for plugins providing file analyzers.
@@ -21,10 +25,11 @@ class Analyzer;
  * A plugin can provide a specific file analyzer by registering this
  * analyzer component, describing the analyzer.
  */
-class Component : public plugin::Component,
+class Component : public zeek::plugin::Component,
                   public plugin::TaggedComponent<file_analysis::Tag> {
 public:
-	typedef Analyzer* (*factory_callback)(RecordVal* args, File* file);
+	typedef Analyzer* (*factory_callback)(zeek::RecordVal* args, File* file);
+	using factory_function = Analyzer* (*)(zeek::RecordValPtr args, File* file);
 
 	/**
 	 * Constructor.
@@ -45,6 +50,9 @@ public:
 	 * analyzer instances can accordingly access it via analyzer::Tag().
 	 * If not used, leave at zero.
 	 */
+	Component(const std::string& name, factory_function factory, Tag::subtype_t subtype = 0);
+
+	[[deprecated("Remove in v4.1.  Use factory_function w/ IntrusivePtr args")]]
 	Component(const std::string& name, factory_callback factory, Tag::subtype_t subtype = 0);
 
 	/**
@@ -62,6 +70,10 @@ public:
 	/**
 	 * Returns the analyzer's factory function.
 	 */
+	factory_function FactoryFunction() const
+		{ return factory_func; }
+
+	[[deprecated("Remove in v4.1.  Use FactoryFunction().")]]
 	factory_callback Factory() const	{ return factory; }
 
 protected:
@@ -71,7 +83,10 @@ protected:
 	void DoDescribe(ODesc* d) const override;
 
 private:
-	factory_callback factory;	// The analyzer's factory callback.
+	friend class file_analysis::Manager;
+
+	factory_callback factory;	// The analyzer's factory callback (deprecated).
+	factory_function factory_func;	// The analyzer's factory callback.
 };
 
 }

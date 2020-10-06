@@ -2,24 +2,34 @@
 
 #pragma once
 
-#include "Obj.h"
-#include "IntrusivePtr.h"
-
 #include <list>
 #include <string>
 #include <utility>
 
 #include <fcntl.h>
 
-# ifdef NEED_KRB5_H
-#  include <krb5.h>
-# endif // NEED_KRB5_H
+#ifdef NEED_KRB5_H
+#include <krb5.h>
+#endif // NEED_KRB5_H
 
-class Attributes;
-class BroType;
-class RecordVal;
+#include "Obj.h"
+#include "IntrusivePtr.h"
+#include "util.h"
 
-class BroFile final : public BroObj {
+namespace zeek {
+	class Type;
+	using TypePtr = zeek::IntrusivePtr<zeek::Type>;
+}
+using BroType [[deprecated("Remove in v4.1. Use zeek::Type instead.")]] = zeek::Type;
+
+ZEEK_FORWARD_DECLARE_NAMESPACED(PrintStmt, zeek::detail);
+ZEEK_FORWARD_DECLARE_NAMESPACED(Attributes, zeek::detail);
+ZEEK_FORWARD_DECLARE_NAMESPACED(RecordVal, zeek);
+
+class BroFile;
+using BroFilePtr = zeek::IntrusivePtr<BroFile>;
+
+class BroFile final : public zeek::Obj {
 public:
 	explicit BroFile(FILE* arg_f);
 	BroFile(FILE* arg_f, const char* filename, const char* access);
@@ -37,7 +47,11 @@ public:
 
 	void SetBuf(bool buffered);	// false=line buffered, true=fully buffered
 
-	BroType* FType() const	{ return t.get(); }
+	[[deprecated("Remove in v4.1.  Use GetType().")]]
+	zeek::Type* FType() const	{ return t.get(); }
+
+	const zeek::TypePtr& GetType() const
+		{ return t; }
 
 	// Whether the file is open in a general sense; it might
 	// not be open as a Unix file due to our management of
@@ -51,10 +65,10 @@ public:
 	void Describe(ODesc* d) const override;
 
 	// Rotates the logfile. Returns rotate_info.
-	RecordVal* Rotate();
+	zeek::RecordVal* Rotate();
 
 	// Set &raw_output attribute.
-	void SetAttrs(Attributes* attrs);
+	void SetAttrs(zeek::detail::Attributes* attrs);
 
 	// Returns the current size of the file, after fresh stat'ing.
 	double Size();
@@ -63,14 +77,17 @@ public:
 	static void CloseOpenFiles();
 
 	// Get the file with the given name, opening it if it doesn't yet exist.
-	static BroFile* GetFile(const char* name);
+	static BroFilePtr Get(const char* name);
+	[[deprecated("Remove in v4.1.  Use BroFile::Get().")]]
+	static BroFile* GetFile(const char* name)
+		{ return Get(name).release(); }
 
 	void EnableRawOutput()		{ raw_output = true; }
 	bool IsRawOutput() const	{ return raw_output; }
 
 protected:
 
-	friend class PrintStmt;
+	friend class zeek::detail::PrintStmt;
 
 	BroFile()	{ Init(); }
 	void Init();
@@ -94,10 +111,10 @@ protected:
 	void RaiseOpenEvent();
 
 	FILE* f;
-	IntrusivePtr<BroType> t;
+	zeek::TypePtr t;
 	char* name;
 	char* access;
-	Attributes* attrs;
+	zeek::detail::Attributes* attrs;
 	double open_time;
 	bool is_open;	// whether the file is open in a general sense
 	bool buffered;
