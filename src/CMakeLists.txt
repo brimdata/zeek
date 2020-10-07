@@ -402,7 +402,14 @@ if ( NOT "${bro_LINKER_FLAGS}" STREQUAL "" )
     set_target_properties(zeek PROPERTIES LINK_FLAGS "${bro_LINKER_FLAGS}")
 endif ()
 
-install(TARGETS zeek DESTINATION bin)
+if ( WIN32 )
+    set_target_properties(zeek PROPERTIES
+                          ENABLE_EXPORTS 1
+                          LINK_FLAGS "${bro_LINKER_FLAGS} -Wl,--export-all-symbols -Wl,--out-implib,src/libzeek.dll.a"
+)
+endif ()
+
+install(TARGETS zeek RUNTIME DESTINATION bin ARCHIVE DESTINATION lib)
 
 if ( NOT WIN32 )
     # Install wrapper script for Bro-to-Zeek renaming.

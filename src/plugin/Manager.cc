@@ -4,8 +4,9 @@
 #include <sstream>
 #include <fstream>
 #include <dirent.h>
-#include <glob.h>
+#ifndef __MINGW32__
 #include <dlfcn.h>
+#endif
 #include <errno.h>
 #include <sys/stat.h>
 
@@ -51,13 +52,13 @@ void Manager::SearchDynamicPlugins(const std::string& dir)
 	if ( dir.empty() )
 		return;
 
-	if ( dir.find(':') != string::npos )
+	if ( dir.find(path_list_separator) != string::npos )
 		{
-		// Split at ":".
+		// Split at path list separator.
 		std::stringstream s(dir);
 		std::string d;
 
-		while ( std::getline(s, d, ':') )
+		while ( std::getline(s, d, path_list_separator) )
 			SearchDynamicPlugins(d);
 
 		return;
@@ -228,38 +229,60 @@ bool Manager::ActivateDynamicPluginInternal(const std::string& name, bool ok_if_
 
 	// Load shared libraries.
 
-	string dypattern = dir + "/lib/*." + HOST_ARCHITECTURE + DYNAMIC_PLUGIN_SUFFIX;
+	string dydir = dir + "/lib";
+	const char *dyext = "." HOST_ARCHITECTURE DYNAMIC_PLUGIN_SUFFIX;
 
-	DBG_LOG(DBG_PLUGINS, "  Searching for shared libraries %s", dypattern.c_str());
+	DBG_LOG(DBG_PLUGINS, "  Searching for shared libraries in %s with extension %s", dydir.c_str(), dyext);
 
-	glob_t gl;
+	DIR* d = opendir(dydir.c_str());
 
-	if ( glob(dypattern.c_str(), 0, 0, &gl) == 0 )
+	if ( ! d )
 		{
-		for ( size_t i = 0; i < gl.gl_pathc; i++ )
+		DBG_LOG(DBG_PLUGINS, "Cannot open directory %s", dydir.c_str());
+		return true;
+		}
+
+	struct dirent *dp;
+
+	while ( (dp = readdir(d)) )
+		{
+		if ( strlen(dp->d_name) >= strlen(dyext)
+		    && streq(dp->d_name + strlen(dp->d_name) - strlen(dyext), dyext) )
 			{
-			const char* path = gl.gl_pathv[i];
+			string path = dydir + "/" + dp->d_name;
 
 			current_plugin = nullptr;
-			current_dir = dir.c_str();
-			current_sopath = path;
-			void* hdl = dlopen(path, RTLD_LAZY | RTLD_GLOBAL);
+			current_dir = dydir.c_str();
+			current_sopath = path.c_str();
 
+#ifdef __MINGW32__
+			void* hdl = LoadLibraryA(path.c_str());
+#else
+			void* hdl = dlopen(path.c_str(), RTLD_LAZY | RTLD_GLOBAL);
+#endif
 			if ( ! hdl )
 				{
-				const char* err = dlerror();
-				reporter->FatalError("cannot load plugin library %s: %s", path, err ? err : "<unknown error>");
+				const char* err = nullptr;
+#ifdef __MINGW32__
+				char buf[65535];
+				const int flags = FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
+				if ( FormatMessageA(flags, nullptr, GetLastError(), 0, buf, sizeof(buf), nullptr ) )
+					err = buf;
+#else
+				err = dlerror();
+#endif
+				reporter->FatalError("cannot load plugin library %s: %s", path.c_str(), err ? err : "<unknown error>");
 				}
 
 			if ( ! current_plugin )
-				reporter->FatalError("load plugin library %s did not instantiate a plugin", path);
+				reporter->FatalError("load plugin library %s did not instantiate a plugin", path.c_str());
 
 			current_plugin->SetDynamic(true);
 			current_plugin->DoConfigure();
 			DBG_LOG(DBG_PLUGINS, "  InitialzingComponents");
 			current_plugin->InitializeComponents();
 
-			plugins_by_path.insert(std::make_pair(normalize_path(dir), current_plugin));
+			plugins_by_path.insert(std::make_pair(normalize_path(dydir), current_plugin));
 
 			// We execute the pre-script initialization here; this in
 			// fact could be *during* script initialization if we got
@@ -272,20 +295,20 @@ bool Manager::ActivateDynamicPluginInternal(const std::string& name, bool ok_if_
 				reporter->FatalError("inconsistent plugin name: %s vs %s",
 						     current_plugin->Name().c_str(), name.c_str());
 
-			current_dir = nullptr;
-			current_sopath = nullptr;
-			current_plugin = nullptr;
-
-			DBG_LOG(DBG_PLUGINS, "  Loaded %s", path);
+			DBG_LOG(DBG_PLUGINS, "  Loaded %s", path.c_str());
 			}
-
-		globfree(&gl);
 		}
 
-	else
+	closedir(d);
+
+	if ( current_plugin == nullptr )
 		{
 		DBG_LOG(DBG_PLUGINS, "  No shared library found");
 		}
+
+	current_dir = nullptr;
+	current_sopath = nullptr;
+	current_plugin = nullptr;
 
 	// Mark this plugin as activated by clearing the path.
 	m->second.clear();

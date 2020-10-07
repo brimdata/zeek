@@ -7,8 +7,17 @@
 #include "supervisor/Supervisor.h"
 #include "Net.h"
 
+#ifdef __MINGW32__
+#include <fcntl.h> // For _O_BINARY.
+#endif
+
 int main(int argc, char** argv)
 	{
+#ifdef __MINGW32__
+	_setmode(_fileno(stdout), _O_BINARY);
+	_setmode(_fileno(stderr), _O_BINARY);
+#endif
+
 	auto time_start = current_time(true);
 	auto setup_result = zeek::detail::setup(argc, argv);
 

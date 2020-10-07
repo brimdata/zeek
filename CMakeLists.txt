@@ -78,20 +78,35 @@ get_filename_component(ZEEK_SCRIPT_INSTALL_PATH ${ZEEK_SCRIPT_INSTALL_PATH}
 
 set(BRO_PLUGIN_INSTALL_PATH ${ZEEK_ROOT_DIR}/lib/zeek/plugins CACHE STRING "Installation path for plugins" FORCE)
 
+set(bro_plugin_install_path "${BRO_PLUGIN_INSTALL_PATH}")
+set(cmake_binary_dir "${CMAKE_BINARY_DIR}")
+set(cmake_current_binary_dir "${CMAKE_CURRENT_BINARY_DIR}")
+set(cmake_install_prefix "${CMAKE_INSTALL_PREFIX}")
+set(cmake_source_dir "${CMAKE_SOURCE_DIR}")
+set(zeek_script_install_path "${ZEEK_SCRIPT_INSTALL_PATH}")
+if ( WIN32 )
+    string(REGEX REPLACE "^([A-Za-z]):/(.*)" "/\\1/\\2" bro_plugin_install_path "${bro_plugin_install_path}")
+    string(REGEX REPLACE "^([A-Za-z]):/(.*)" "/\\1/\\2" cmake_binary_dir "${cmake_binary_dir}")
+    string(REGEX REPLACE "^([A-Za-z]):/(.*)" "/\\1/\\2" cmake_current_binary_dir "${cmake_current_binary_dir}")
+    string(REGEX REPLACE "^([A-Za-z]):/(.*)" "/\\1/\\2" cmake_install_prefix "${cmake_install_prefix}")
+    string(REGEX REPLACE "^([A-Za-z]):/(.*)" "/\\1/\\2" cmake_source_dir "${cmake_source_dir}")
+    string(REGEX REPLACE "^([A-Za-z]):/(.*)" "/\\1/\\2" zeek_script_install_path "${zeek_script_install_path}")
+endif ()
+
 configure_file(zeek-path-dev.in ${CMAKE_CURRENT_BINARY_DIR}/zeek-path-dev)
 execute_process(COMMAND "${CMAKE_COMMAND}" -E create_symlink
                 "${CMAKE_CURRENT_BINARY_DIR}/zeek-wrapper.in"
                 "${CMAKE_CURRENT_BINARY_DIR}/bro-path-dev")
 
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/zeek-path-dev.sh
-     "export ZEEKPATH=`${CMAKE_CURRENT_BINARY_DIR}/zeek-path-dev`\n"
-     "export ZEEK_PLUGIN_PATH=\"${CMAKE_CURRENT_BINARY_DIR}/src\":${ZEEK_PLUGIN_PATH}\n"
-     "export PATH=\"${CMAKE_CURRENT_BINARY_DIR}/src\":$PATH\n")
+     "export ZEEKPATH=`${cmake_current_binary_dir}/zeek-path-dev`\n"
+     "export ZEEK_PLUGIN_PATH=\"${cmake_current_binary_dir}/src\":${ZEEK_PLUGIN_PATH}\n"
+     "export PATH=\"${cmake_current_binary_dir}/src\":$PATH\n")
 
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/zeek-path-dev.csh
-     "setenv ZEEKPATH `${CMAKE_CURRENT_BINARY_DIR}/zeek-path-dev`\n"
-     "setenv ZEEK_PLUGIN_PATH \"${CMAKE_CURRENT_BINARY_DIR}/src\":${ZEEK_PLUGIN_PATH}\n"
-     "setenv PATH \"${CMAKE_CURRENT_BINARY_DIR}/src\":$PATH\n")
+     "setenv ZEEKPATH `${cmake_current_binary_dir}/zeek-path-dev`\n"
+     "setenv ZEEK_PLUGIN_PATH \"${cmake_current_binary_dir}/src\":${ZEEK_PLUGIN_PATH}\n"
+     "setenv PATH \"${cmake_current_binary_dir}/src\":$PATH\n")
 
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" VERSION LIMIT_COUNT 1)
 execute_process(COMMAND grep "^#define  *BRO_PLUGIN_API_VERSION"
@@ -247,6 +262,10 @@ if ( CAF_ROOT_DIR )
 endif ()
 
 add_subdirectory(auxil/paraglob)
+if ( WIN32 )
+    cmake_policy(SET CMP0079 NEW)
+    target_link_libraries(paraglob shlwapi)
+endif ()
 set(zeekdeps ${zeekdeps} paraglob)
 
 if ( BROKER_ROOT_DIR )
@@ -396,7 +415,12 @@ endif()
 # Tell the plugin code that we're building as part of the main tree.
 set(ZEEK_PLUGIN_INTERNAL_BUILD true CACHE INTERNAL "" FORCE)
 
-set(DEFAULT_ZEEKPATH .:${ZEEK_SCRIPT_INSTALL_PATH}:${ZEEK_SCRIPT_INSTALL_PATH}/policy:${ZEEK_SCRIPT_INSTALL_PATH}/site)
+set(default_zeekpath ".:${zeek_script_install_path}:${zeek_script_install_path}/policy:${zeek_script_install_path}/site")
+if ( WIN32 )
+    set(DEFAULT_ZEEKPATH ".;${ZEEK_SCRIPT_INSTALL_PATH};${ZEEK_SCRIPT_INSTALL_PATH}/policy;${ZEEK_SCRIPT_INSTALL_PATH}/site")
+else ()
+    set(DEFAULT_ZEEKPATH "${default_zeekpath}")
+endif ()
 
 if ( NOT BINARY_PACKAGING_MODE )
     set(ZEEK_DIST ${CMAKE_SOURCE_DIR})
