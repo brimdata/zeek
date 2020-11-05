@@ -137,7 +137,7 @@ install_zeek_package() {
 
 $sudo pip install btest
 
-install_zeek_package brimsec/geoip-conn f8c66962d15a09052ab64a6413c1eadcb23e4ca2
+install_zeek_package brimsec/geoip-conn 646315a4ae0e31eb82fefe478745f6cddd9a8134
 install_zeek_package corelight/zeek-community-id 181a104b99d9019771ece7e489e46f2268b746d8
 install_zeek_package salesforce/hassh cfa2315257eaa972e86f7fcd694712e0d32762ff
 install_zeek_package salesforce/ja3 133f2a128b873f9c40e4e65c2b9dc372a801cf24
