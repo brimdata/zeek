@@ -117,6 +117,9 @@ install_zeek_package() {
 
         build_command=$(zkg_meta package build_command)
         if [ "$build_command" ]; then
+            if [ "$OS" = Windows_NT ]; then
+                export LDFLAGS='-static -Wl,--allow-multiple-definition'
+            fi
             sh -c "$build_command"
             $sudo tar -xf build/*.tgz -C /usr/local/zeek/lib/zeek/plugins
         fi
@@ -125,7 +128,7 @@ install_zeek_package() {
         if [ "$test_command" ]; then
             # Btest fails without explanation on the GitHub Actions
             # Windows runners, so skip tests there.
-            if [ "$GITHUB_ACTIONS" != true -o "$OS" != Windows_NT || ]; then
+            if [ "$GITHUB_ACTIONS" != true -o "$OS" != Windows_NT ]; then
                sh -c "$test_command"
             fi
         fi
