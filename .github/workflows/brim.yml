@@ -51,10 +51,12 @@ jobs:
 
       - uses: actions/cache@v2
         with:
-          path: ~/.ccache
+          path: ${{runner.temp}}/.ccache
           key: ${{ runner.os }}-ccache
 
       - run: ./brim/release
+        env:
+          CCACHE_DIR: ${{runner.temp}}/.ccache
 
       - uses: actions/upload-artifact@v2
         with:
