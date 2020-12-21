@@ -24,7 +24,7 @@ case $(uname) in
         ;;
     Linux)
         sudo=sudo
-        sudo apt-get -y install bison ccache flex libmaxminddb-dev libssl-dev ninja-build
+        sudo apt-get -y install bison ccache flex libmaxminddb-dev libssl-dev ninja-build python3-setuptools
         # Compile a recent libpcap since the one we'd get via apt-get is
         # old and hits https://github.com/brimsec/zeek/issues/17.
         install_libpcap /
@@ -39,7 +39,7 @@ case $(uname) in
             bison flex make mingw-w64-x86_64-ccache \
             mingw-w64-x86_64-cmake mingw-w64-x86_64-gcc \
             mingw-w64-x86_64-libmaxminddb mingw-w64-x86_64-ninja \
-            mingw-w64-x86_64-openssl python-pip zip
+            mingw-w64-x86_64-openssl python3-setuptools zip
         install_libpcap /mingw64
         # Replace some symlinks with a copy of the target file because
         # CMake chokes on them with "file INSTALL cannot read symlink"
@@ -138,7 +138,7 @@ install_zeek_package() {
     rm -r $package
 }
 
-$sudo pip install btest
+$sudo pip3 install btest wheel
 
 install_zeek_package brimsec/geoip-conn 16372c501a8020fc7bf98f33c3b23a066ab80aa2
 install_zeek_package corelight/zeek-community-id 181a104b99d9019771ece7e489e46f2268b746d8
