@@ -140,7 +140,7 @@ install_zeek_package() {
 
 $sudo pip3 install btest wheel
 
-install_zeek_package brimsec/geoip-conn 16372c501a8020fc7bf98f33c3b23a066ab80aa2
+install_zeek_package brimsec/geoip-conn ad338676ed1b221bb33f838e0359c5005ffa035e
 install_zeek_package corelight/zeek-community-id 181a104b99d9019771ece7e489e46f2268b746d8
 install_zeek_package salesforce/hassh cfa2315257eaa972e86f7fcd694712e0d32762ff
 install_zeek_package salesforce/ja3 133f2a128b873f9c40e4e65c2b9dc372a801cf24
