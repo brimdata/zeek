@@ -17,7 +17,7 @@ import (
 
 // These paths are relative to the zdeps/zeek directory.
 var (
-	zeekExecRelPath  = "bin/zeek.exe"
+	zeekExecRelPath  = "bin/zeekcmd.exe"
 	zeekPathRelPaths = []string{
 		"share/zeek",
 		"share/zeek/policy",
@@ -37,17 +37,12 @@ func pathEnvVar(name, topDir string, subdirs []string) string {
 	return name + "=" + val
 }
 
-var ExecScript = `
-event zeek_init() {
-       Log::disable_stream(PacketFilter::LOG);
-       Log::disable_stream(LoadedScripts::LOG);
-}`
-
-func launchZeek(zdepsZeekDir, zeekExecPath string) error {
+func launchZeek(zdepsZeekDir, zeekExecPath string, args []string) error {
 	zeekPath := pathEnvVar("ZEEKPATH", zdepsZeekDir, zeekPathRelPaths)
 	zeekPlugin := pathEnvVar("ZEEK_PLUGIN_PATH", zdepsZeekDir, zeekPluginRelPaths)
 
-	cmd := exec.Command(zeekExecPath, "-C", "-r", "-", "--exec", ExecScript, "local")
+	cmd := exec.Command(zeekExecPath)
+	cmd.Args = args
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -78,7 +73,7 @@ func main() {
 		log.Fatalln("zeek executable not found at", zeekExecPath)
 	}
 
-	err = launchZeek(zdepsZeekDir, zeekExecPath)
+	err = launchZeek(zdepsZeekDir, zeekExecPath, os.Args[1:])
 	if err != nil {
 		log.Fatalln("launchZeek failed", err)
 	}

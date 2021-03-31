@@ -34,7 +34,7 @@ case $(uname) in
         export CMAKE_GENERATOR='MSYS Makefiles'  # For Zeek plugins.
         export MSYS=winsymlinks:nativestrict
         export PATH=/mingw64/bin:$PATH
-        go build -o brim/zeekrunner.exe brim/zeekrunner.go
+        go build -o brim/zeek.exe brim/zeek.go
         pacman -S --needed --noconfirm \
             bison flex make mingw-w64-x86_64-ccache \
             mingw-w64-x86_64-cmake mingw-w64-x86_64-gcc \
@@ -150,8 +150,8 @@ install_zeek_package salesforce/ja3 133f2a128b873f9c40e4e65c2b9dc372a801cf24
 #
 
 mkdir -p zeek/bin zeek/lib/zeek zeek/share/zeek
-cp brim/zeekrunner$exe zeek/
-cp /usr/local/zeek/bin/zeek$exe zeek/bin/
+cp brim/zeek$exe zeek/bin
+cp /usr/local/zeek/bin/zeek$exe zeek/bin/zeekcmd$exe
 cp -R /usr/local/zeek/lib/zeek/plugins zeek/lib/zeek/
 for d in base policy site; do
     cp -R /usr/local/zeek/share/zeek/$d zeek/share/zeek/
