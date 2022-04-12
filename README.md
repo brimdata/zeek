@@ -1,3 +1,16 @@
+About This Repository
+---------------------
+This fork of [Zeek](https://github.com/zeek/zeek) was created by the
+development team at [Brim Data](https://www.brimdata.io/) for inclusion with
+[Brimcap](https://github.com/brimdata/brimcap) and the [Brim desktop app](https://github.com/brimdata/brim).
+Most of the changes relative to mainline Zeek relate to support on Windows for
+generating Zeek logs from pcaps.
+
+Community contributions are welcomed to assist with upstreaming the changes to
+mainline Zeek. Issue [zeek/951](https://github.com/zeek/zeek/issues/951) tracks this effort. As mainlining efforts have seen minimal traction thus far, help
+would also be appreciated in getting the changes to to work with newer Zeek
+releases, as the Zeek version on which this fork was based is now quite old.
+
 <h1 align="center">
 
 [![Zeek Logo](https://zeek.org/wp-content/uploads/2020/04/zeek-logo-without-text.png)](https:://www.zeek.org)
