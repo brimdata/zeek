@@ -30,7 +30,7 @@ jobs:
         name: Windows alternative for actions/checkout@v2
         run: |
           set -x
-          git clone --depth=1 --no-checkout --single-branch git://github.com/$GITHUB_REPOSITORY .
+          git clone --depth=1 --no-checkout --single-branch https://github.com/$GITHUB_REPOSITORY .
           git fetch --depth=1 origin $GITHUB_REF
           git -c core.symlinks=true checkout FETCH_HEAD -- ':(exclude)**/*:*'
           git submodule update --depth=1 --init --jobs $NUMBER_OF_PROCESSORS --recursive --single-branch
