@@ -4,7 +4,7 @@ This fork of [Zeek](https://github.com/zeek/zeek) was created by the
 development team at [Brim Data](https://www.brimdata.io/) for inclusion with
 [Brimcap](https://github.com/brimdata/brimcap) and the [Brim desktop app](https://github.com/brimdata/brim).
 Most of the changes relative to mainline Zeek relate to support on Windows for
-generatiing Zeek logs from pcaps.
+generating Zeek logs from pcaps.
 
 Community contributions are welcomed to assist with upstreaming the changes to
 mainline Zeek. Issue [zeek/951](https://github.com/zeek/zeek/issues/951) tracks this effort. As mainlining efforts have seen minimal traction thus far, help
