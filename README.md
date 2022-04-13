@@ -105,4 +105,4 @@ License
 -------
 
 Zeek comes with a BSD license, allowing for free use with virtually no
-restrictions. You can find it [here](https://github.com/zeek/zeek/blob/master/COPYING).
+restrictions. You can find it [here](https://github.com/zeek/zeek/blob/master/COPYING). 
