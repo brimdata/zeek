@@ -35,7 +35,7 @@ jobs:
           git -c core.symlinks=true checkout FETCH_HEAD -- ':(exclude)**/*:*'
           git submodule update --depth=1 --init --jobs $NUMBER_OF_PROCESSORS --recursive --single-branch
       - if: "!startsWith(matrix.os, 'windows-')"
-        uses: actions/checkout@v333
+        uses: actions/checkout@v3
         with:
           submodules: recursive
 
