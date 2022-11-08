@@ -23,11 +23,11 @@ jobs:
       - if: startsWith(matrix.os, 'windows-')
         run: echo 'C:\msys64\usr\bin' >> $GITHUB_PATH
 
-      # actions/checkout@v2 chokes on Windows because Git for Windows'
+      # actions/checkout@v3 chokes on Windows because Git for Windows'
       # git.exe can't handle the colons in the names of some files under
       # testing/btest/Baseline/.
       - if: startsWith(matrix.os, 'windows-')
-        name: Windows alternative for actions/checkout@v2
+        name: Windows alternative for actions/checkout@v3
         run: |
           set -x
           git clone --depth=1 --no-checkout --single-branch git://github.com/$GITHUB_REPOSITORY .
@@ -35,7 +35,7 @@ jobs:
           git -c core.symlinks=true checkout FETCH_HEAD -- ':(exclude)**/*:*'
           git submodule update --depth=1 --init --jobs $NUMBER_OF_PROCESSORS --recursive --single-branch
       - if: "!startsWith(matrix.os, 'windows-')"
-        uses: actions/checkout@v2
+        uses: actions/checkout@v333
         with:
           submodules: recursive
 
