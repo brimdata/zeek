@@ -1,3 +1,7 @@
+As [Zeek now supports Windows](https://zeek.org/2022/11/28/zeek-on-windows/), this repository has been archived. Specific build and packaging steps for Zeek's inclusion with [Brimcap](https://github.com/brimdata/brimcap) and [Zui](https://zui.brimdata.io/) are now covered in the [build-zeek repository](https://github.com/brimdata/build-zeek).
+
+---
+
 About This Repository
 ---------------------
 This fork of [Zeek](https://github.com/zeek/zeek) was created by the
